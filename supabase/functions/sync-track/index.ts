@@ -50,38 +50,25 @@ serve(async (req) => {
       const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`Found YouTube Video: ${youtubeUrl}`);
 
-      // 1.2 使用 Cobalt API 提取完整音频流
+      // 1.2 使用 Cobalt API (v10+) 提取完整音频流
       console.log(`Requesting Cobalt API for audio extraction...`);
       
-      // Cobalt API 配置 (优先尝试 v7 接口，如果失败则尝试旧版)
+      // Cobalt API v10+ 配置
       const cobaltPayload = {
         url: youtubeUrl,
-        isAudioOnly: true,
-        aFormat: 'mp3'
+        downloadMode: 'audio',
+        audioFormat: 'mp3'
       };
 
-      let cobaltRes = await fetch('https://api.cobalt.tools/', {
+      const cobaltRes = await fetch('https://api.cobalt.tools/', {
         method: 'POST',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
         },
         body: JSON.stringify(cobaltPayload)
       });
-
-      // 如果主接口失败，尝试 api/json 路径
-      if (!cobaltRes.ok) {
-        cobaltRes = await fetch('https://api.cobalt.tools/api/json', {
-          method: 'POST',
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-          },
-          body: JSON.stringify(cobaltPayload)
-        });
-      }
 
       if (!cobaltRes.ok) {
         const errText = await cobaltRes.text();
@@ -91,7 +78,7 @@ serve(async (req) => {
 
       const cobaltData = await cobaltRes.json();
       if (cobaltData.status === 'error') {
-        throw new Error(`Cobalt 提取失败: ${cobaltData.text}`);
+        throw new Error(`Cobalt 提取失败: ${cobaltData.text || '未知错误'}`);
       }
       
       targetAudioUrl = cobaltData.url;
