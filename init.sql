@@ -8,6 +8,7 @@ CREATE TABLE public.tracks (
     artist TEXT NOT NULL,
     album_cover_url TEXT,
     file_path TEXT, -- 同步前可能为空
+    source_url TEXT, -- 原始音频链接
     position INTEGER NOT NULL DEFAULT 0,
     is_synced BOOLEAN DEFAULT false, -- 标识是否已同步到 Supabase Storage
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
@@ -28,6 +29,10 @@ CREATE POLICY "Allow public update access" ON public.tracks
 CREATE POLICY "Allow public insert access" ON public.tracks
     FOR INSERT WITH CHECK (true);
 
+-- 5.6 创建 RLS 策略：允许删除数据
+CREATE POLICY "Allow public delete access" ON public.tracks
+    FOR DELETE USING (true);
+
 -- 6. 创建名为 'audio' 的公开存储桶 (如果不存在)
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('audio', 'audio', true)
@@ -40,3 +45,7 @@ CREATE POLICY "Public Access to Audio Files" ON storage.objects
 -- 8. 允许上传文件到 audio 存储桶
 CREATE POLICY "Allow public uploads" ON storage.objects
     FOR INSERT WITH CHECK (bucket_id = 'audio');
+
+-- 9. 允许删除 audio 存储桶中的文件
+CREATE POLICY "Allow public deletes" ON storage.objects
+    FOR DELETE USING (bucket_id = 'audio');

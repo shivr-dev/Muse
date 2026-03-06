@@ -167,6 +167,26 @@ header h2 {
     cursor: pointer;
 }
 
+.track-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-delete {
+    background-color: transparent;
+    color: var(--text-secondary);
+    border-radius: 50%;
+    padding: 8px;
+    min-width: 36px;
+    min-height: 36px;
+}
+
+.btn-delete:hover {
+    background-color: rgba(255, 68, 68, 0.1);
+    color: #ff4444;
+}
+
 /* 同步按钮样式 */
 .btn-sync {
     background-color: rgba(255, 255, 255, 0.1);

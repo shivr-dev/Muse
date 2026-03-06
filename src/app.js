@@ -95,6 +95,9 @@ function renderTrackList() {
             </div>
             <div class="track-actions">
                 ${syncStatusHtml}
+                <button class="btn-delete" data-id="${track.id}" data-index="${index}" title="删除歌曲">
+                    <i data-lucide="trash-2"></i>
+                </button>
             </div>
         `;
 
@@ -117,6 +120,15 @@ function renderTrackList() {
             });
         }
 
+        // 绑定删除按钮事件
+        const deleteBtn = item.querySelector('.btn-delete');
+        if (deleteBtn) {
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteTrack(track.id, index, track.file_path);
+            });
+        }
+
         trackListEl.appendChild(item);
     });
     lucide.createIcons();
@@ -132,7 +144,7 @@ async function syncTrack(trackId, title, artist, btnElement, index) {
 
         // 调用 Supabase Edge Function
         const { data, error } = await supabase.functions.invoke('sync-track', {
-            body: { trackId, title, artist }
+            body: { trackId, title, artist, sourceUrl: tracks[index].source_url }
         });
 
         if (error) throw error;
@@ -153,6 +165,40 @@ async function syncTrack(trackId, title, artist, btnElement, index) {
         btnElement.innerHTML = `<i data-lucide="cloud-download"></i> 重试同步`;
         btnElement.disabled = false;
         lucide.createIcons();
+    }
+}
+
+// 删除歌曲
+async function deleteTrack(id, index, filePath) {
+    if (!confirm('确定要删除这首歌吗？')) return;
+    
+    try {
+        // 1. 如果已同步，先删除 Storage 中的文件
+        if (filePath) {
+            await supabase.storage.from('audio').remove([filePath]);
+        }
+        
+        // 2. 删除数据库记录
+        const { error } = await supabase.from('tracks').delete().eq('id', id);
+        if (error) throw error;
+        
+        // 3. 更新 UI 状态
+        if (currentTrackIndex === index) {
+            audio.pause();
+            isPlaying = false;
+            updatePlayButton();
+            currentTrackIndex = -1;
+            document.getElementById('track-title').textContent = '未播放';
+            document.getElementById('track-artist').textContent = '-';
+            document.getElementById('cover-img').src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+        } else if (currentTrackIndex > index) {
+            currentTrackIndex--;
+        }
+        
+        await fetchTracks();
+    } catch (err) {
+        console.error('删除失败:', err);
+        alert('删除失败: ' + err.message);
     }
 }
 
@@ -307,28 +353,41 @@ function setupEventListeners() {
 
     // 导入数据
     if (importBtn) {
-        importBtn.addEventListener('click', importMockData);
+        importBtn.addEventListener('click', importData);
     }
 }
 
-// 导入测试数据
-async function importMockData() {
-    const input = prompt("请输入包含 Spotify 数据的 JSON 数组（留空则导入默认测试数据）：");
+// 导入数据 (支持 HTTPS 链接或 JSON)
+async function importData() {
+    const input = prompt("请输入 MP3/音频的 HTTPS 链接，或包含 Spotify 数据的 JSON 数组（留空导入默认测试数据）：");
     let dataToImport = [];
     
     if (input) {
-        try {
-            dataToImport = JSON.parse(input);
-            if (!Array.isArray(dataToImport)) throw new Error("必须是 JSON 数组");
-        } catch (e) {
-            alert("JSON 格式错误：" + e.message);
-            return;
+        // 判断是否为 HTTPS 链接
+        if (input.startsWith('http://') || input.startsWith('https://')) {
+            const title = prompt("请输入歌曲名称：", "未知歌曲") || "未知歌曲";
+            const artist = prompt("请输入歌手名称：", "未知歌手") || "未知歌手";
+            dataToImport = [{
+                title: title,
+                artist: artist,
+                source_url: input,
+                album_cover_url: `https://picsum.photos/seed/${encodeURIComponent(title)}/400/400`,
+                position: tracks.length + 1
+            }];
+        } else {
+            try {
+                dataToImport = JSON.parse(input);
+                if (!Array.isArray(dataToImport)) throw new Error("必须是 JSON 数组");
+            } catch (e) {
+                alert("输入格式错误，请输入有效的 HTTPS 链接或 JSON 数组：" + e.message);
+                return;
+            }
         }
     } else {
         dataToImport = [
-            { title: "Shape of You", artist: "Ed Sheeran", album_cover_url: "https://picsum.photos/seed/shape/400/400", position: 1 },
-            { title: "Blinding Lights", artist: "The Weeknd", album_cover_url: "https://picsum.photos/seed/blinding/400/400", position: 2 },
-            { title: "Dance Monkey", artist: "Tones and I", album_cover_url: "https://picsum.photos/seed/dance/400/400", position: 3 }
+            { title: "Shape of You", artist: "Ed Sheeran", album_cover_url: "https://picsum.photos/seed/shape/400/400", position: tracks.length + 1 },
+            { title: "Blinding Lights", artist: "The Weeknd", album_cover_url: "https://picsum.photos/seed/blinding/400/400", position: tracks.length + 2 },
+            { title: "Dance Monkey", artist: "Tones and I", album_cover_url: "https://picsum.photos/seed/dance/400/400", position: tracks.length + 3 }
         ];
     }
 
