@@ -106,9 +106,9 @@ serve(async (req) => {
     }
 
     // 2. 将 ReadableStream 直接上传到 Supabase Storage
-    // 过滤掉文件名中的非法字符
-    const safeTitle = title.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '')
-    const filePath = `${artist}-${safeTitle}-${Date.now()}.mp3`
+    // 使用 UUID 作为文件名，避免中文字符导致 Supabase Storage 报错 (Invalid key)
+    const fileId = crypto.randomUUID();
+    const filePath = `${fileId}.mp3`
     
     console.log(`Uploading to Storage: ${filePath}`)
     const { data: uploadData, error: uploadError } = await supabase.storage
