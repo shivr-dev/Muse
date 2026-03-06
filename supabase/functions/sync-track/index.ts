@@ -24,10 +24,80 @@ serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!; // 这个也是系统内置的
     const supabase = createClient(supabaseUrl, supabaseKey)
 
-    // 1. 获取音频文件流 (模拟从第三方搜索并下载)
-    // 实际项目中，这里可以调用第三方 API 获取真实的 MP3 直链
-    // 这里使用一个公共的免版权测试音频作为 fallback 演示
-    const targetAudioUrl = sourceUrl || 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3'
+    // 1. 获取音频文件流
+    let targetAudioUrl = sourceUrl;
+    
+    // 如果没有提供直链，我们通过 YouTube 搜索并使用 Cobalt API 下载完整音频
+    if (!targetAudioUrl) {
+      console.log(`Searching YouTube for: ${title} - ${artist}`);
+      const query = encodeURIComponent(`${title} ${artist} audio`);
+      
+      // 1.1 搜索 YouTube 获取 Video ID
+      const ytRes = await fetch(`https://www.youtube.com/results?search_query=${query}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+        }
+      });
+      const ytHtml = await ytRes.text();
+      // 匹配第一个视频 ID (长度为11的字符串)
+      const videoIdMatch = ytHtml.match(/"videoId":"([^"]{11})"/);
+      
+      if (!videoIdMatch) {
+        throw new Error('无法在 YouTube 上找到对应的歌曲');
+      }
+      
+      const videoId = videoIdMatch[1];
+      const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      console.log(`Found YouTube Video: ${youtubeUrl}`);
+
+      // 1.2 使用 Cobalt API 提取完整音频流
+      console.log(`Requesting Cobalt API for audio extraction...`);
+      
+      // Cobalt API 配置 (优先尝试 v7 接口，如果失败则尝试旧版)
+      const cobaltPayload = {
+        url: youtubeUrl,
+        isAudioOnly: true,
+        aFormat: 'mp3'
+      };
+
+      let cobaltRes = await fetch('https://api.cobalt.tools/', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        },
+        body: JSON.stringify(cobaltPayload)
+      });
+
+      // 如果主接口失败，尝试 api/json 路径
+      if (!cobaltRes.ok) {
+        cobaltRes = await fetch('https://api.cobalt.tools/api/json', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+          },
+          body: JSON.stringify(cobaltPayload)
+        });
+      }
+
+      if (!cobaltRes.ok) {
+        const errText = await cobaltRes.text();
+        console.error('Cobalt API Error:', errText);
+        throw new Error('音频提取服务(Cobalt)暂时不可用，请稍后再试');
+      }
+
+      const cobaltData = await cobaltRes.json();
+      if (cobaltData.status === 'error') {
+        throw new Error(`Cobalt 提取失败: ${cobaltData.text}`);
+      }
+      
+      targetAudioUrl = cobaltData.url;
+      console.log(`Successfully extracted audio URL: ${targetAudioUrl}`);
+    }
+
     console.log(`Fetching audio from: ${targetAudioUrl}`)
     
     const audioResponse = await fetch(targetAudioUrl)

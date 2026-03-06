@@ -357,14 +357,39 @@ function setupEventListeners() {
     }
 }
 
-// 导入数据 (支持 HTTPS 链接或 JSON)
+// 导入数据 (支持 Spotify 链接、HTTPS MP3 链接或 JSON)
 async function importData() {
-    const input = prompt("请输入 MP3/音频的 HTTPS 链接，或包含 Spotify 数据的 JSON 数组（留空导入默认测试数据）：");
-    let dataToImport = [];
-    
-    if (input) {
-        // 判断是否为 HTTPS 链接
-        if (input.startsWith('http://') || input.startsWith('https://')) {
+    const input = prompt("请输入 Spotify 歌单/单曲链接，或 MP3 直链，或 JSON 数组：\n(例如: https://open.spotify.com/playlist/...)");
+    if (!input) return;
+
+    try {
+        importBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> 处理中...`;
+        importBtn.disabled = true;
+        lucide.createIcons();
+
+        let dataToImport = [];
+
+        // 1. 处理 Spotify 链接
+        if (input.includes('spotify.com')) {
+            importBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> 解析 Spotify...`;
+            lucide.createIcons();
+            
+            const { data, error } = await supabase.functions.invoke('parse-spotify', {
+                body: { url: input }
+            });
+            
+            if (error) throw new Error(data?.error || error.message);
+            if (!data.tracks || data.tracks.length === 0) throw new Error('未找到歌曲');
+
+            dataToImport = data.tracks.map((t, i) => ({
+                title: t.title,
+                artist: t.artist,
+                album_cover_url: t.album_cover_url,
+                position: tracks.length + i + 1
+            }));
+        } 
+        // 2. 处理普通 MP3 HTTPS 链接
+        else if (input.startsWith('http://') || input.startsWith('https://')) {
             const title = prompt("请输入歌曲名称：", "未知歌曲") || "未知歌曲";
             const artist = prompt("请输入歌手名称：", "未知歌手") || "未知歌手";
             dataToImport = [{
@@ -374,33 +399,23 @@ async function importData() {
                 album_cover_url: `https://picsum.photos/seed/${encodeURIComponent(title)}/400/400`,
                 position: tracks.length + 1
             }];
-        } else {
-            try {
-                dataToImport = JSON.parse(input);
-                if (!Array.isArray(dataToImport)) throw new Error("必须是 JSON 数组");
-            } catch (e) {
-                alert("输入格式错误，请输入有效的 HTTPS 链接或 JSON 数组：" + e.message);
-                return;
-            }
+        } 
+        // 3. 处理 JSON 数组
+        else {
+            dataToImport = JSON.parse(input);
+            if (!Array.isArray(dataToImport)) throw new Error("必须是 JSON 数组");
         }
-    } else {
-        dataToImport = [
-            { title: "Shape of You", artist: "Ed Sheeran", album_cover_url: "https://picsum.photos/seed/shape/400/400", position: tracks.length + 1 },
-            { title: "Blinding Lights", artist: "The Weeknd", album_cover_url: "https://picsum.photos/seed/blinding/400/400", position: tracks.length + 2 },
-            { title: "Dance Monkey", artist: "Tones and I", album_cover_url: "https://picsum.photos/seed/dance/400/400", position: tracks.length + 3 }
-        ];
-    }
 
-    try {
-        importBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> 导入中...`;
-        importBtn.disabled = true;
+        // 插入数据库
+        importBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> 写入数据库...`;
         lucide.createIcons();
+        
+        const { error: insertError } = await supabase.from('tracks').insert(dataToImport);
+        if (insertError) throw insertError;
 
-        const { error } = await supabase.from('tracks').insert(dataToImport);
-        if (error) throw error;
-
-        alert('导入成功！');
+        alert(`成功导入 ${dataToImport.length} 首歌曲！`);
         await fetchTracks();
+        
     } catch (err) {
         console.error('导入失败:', err);
         alert('导入失败: ' + err.message);
