@@ -19,9 +19,9 @@ serve(async (req) => {
       throw new Error('Missing required fields: trackId or title')
     }
 
-    // 初始化 Supabase 客户端 (使用 Service Role Key 绕过 RLS 进行后台操作)
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? ''
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    // 直接从 Deno 环境获取，不需要手动设置
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!; // 这个也是系统内置的
     const supabase = createClient(supabaseUrl, supabaseKey)
 
     // 1. 获取音频文件流 (模拟从第三方搜索并下载)
