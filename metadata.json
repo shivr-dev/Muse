@@ -1,0 +1,5 @@
+{
+  "name": "Spotify Style Player",
+  "description": "A lightweight, responsive full-stack web application featuring a Spotify-style personal music player with Supabase integration, full-screen mode, and a Picture-in-Picture sticky player.",
+  "requestFramePermissions": []
+}

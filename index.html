@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify Style Player</title>
+    <!-- 使用国内可访问的 CDN 引入 Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+    <div id="app" class="mode-standard">
+        <!-- 背景模糊层 (全屏模式使用) -->
+        <div id="bg-blur"></div>
+
+        <!-- 侧边栏 -->
+        <aside id="sidebar">
+            <div class="logo">
+                <i data-lucide="music"></i>
+                <span>MyPlayer</span>
+            </div>
+            <nav>
+                <ul>
+                    <li class="active"><i data-lucide="home"></i> 首页</li>
+                    <li><i data-lucide="search"></i> 搜索</li>
+                    <li><i data-lucide="library"></i> 音乐库</li>
+                </ul>
+            </nav>
+        </aside>
+
+        <!-- 主内容区：歌曲列表 -->
+        <main id="main-content">
+            <header>
+                <h2>我的歌单</h2>
+                <div class="actions">
+                    <button id="btn-mode-standard" class="active" title="标准模式"><i data-lucide="layout-grid"></i></button>
+                    <button id="btn-mode-full" title="全屏模式"><i data-lucide="maximize"></i></button>
+                    <button id="btn-mode-mini" title="小窗模式"><i data-lucide="minimize-2"></i></button>
+                </div>
+            </header>
+            <div id="track-list" class="track-list">
+                <div class="loading">加载中...</div>
+            </div>
+        </main>
+
+        <!-- 底部控制栏 -->
+        <footer id="player-bar">
+            <div class="now-playing">
+                <img id="cover-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="cover">
+                <div class="track-info">
+                    <div id="track-title">未播放</div>
+                    <div id="track-artist">-</div>
+                </div>
+            </div>
+            <div class="player-controls">
+                <div class="buttons">
+                    <button id="btn-prev"><i data-lucide="skip-back"></i></button>
+                    <button id="btn-play" class="play-btn"><i data-lucide="play"></i></button>
+                    <button id="btn-next"><i data-lucide="skip-forward"></i></button>
+                </div>
+                <div class="progress-container">
+                    <span id="time-current">0:00</span>
+                    <div class="progress-bar" id="progress-bar">
+                        <div class="progress" id="progress"></div>
+                    </div>
+                    <span id="time-total">0:00</span>
+                </div>
+            </div>
+            <div class="extra-controls">
+                <button id="btn-pip" title="画中画悬浮窗"><i data-lucide="picture-in-picture-2"></i></button>
+                <i data-lucide="volume-2"></i>
+                <input type="range" id="volume-slider" min="0" max="1" step="0.01" value="1">
+            </div>
+        </footer>
+
+        <!-- 隐藏的 Canvas，用于生成画中画视频流 -->
+        <canvas id="pip-canvas" width="512" height="512" style="display: none;"></canvas>
+        <video id="pip-video" muted playsinline style="display: none;"></video>
+    </div>
+
+    <!-- 业务逻辑 -->
+    <script type="module" src="/src/supabase-config.js"></script>
+    <script type="module" src="/src/app.js"></script>
+</body>
+</html>
