@@ -24,6 +24,10 @@ CREATE POLICY "Allow public read access" ON public.tracks
 CREATE POLICY "Allow public update access" ON public.tracks
     FOR UPDATE USING (true);
 
+-- 5.5 创建 RLS 策略：允许插入数据（为了前端能导入测试数据）
+CREATE POLICY "Allow public insert access" ON public.tracks
+    FOR INSERT WITH CHECK (true);
+
 -- 6. 创建名为 'audio' 的公开存储桶 (如果不存在)
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('audio', 'audio', true)
