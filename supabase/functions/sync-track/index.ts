@@ -50,35 +50,68 @@ serve(async (req) => {
       const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`Found YouTube Video: ${youtubeUrl}`);
 
-      // 1.2 使用 Cobalt API (v10+) 提取完整音频流
+      // 1.2 使用 Cobalt API (V11) 提取完整音频流，实现节点轮询
       console.log(`Requesting Cobalt API for audio extraction...`);
       
-      // Cobalt API v10+ 配置
+      const COBALT_NODES = [
+        'https://cobalt-api.meowing.de/',
+        'https://kityune.imput.net/',
+        'https://api.v7.cobalt.tools/',
+        'https://nachos.imput.net/'
+      ];
+      
+      // Cobalt API V11 配置
       const cobaltPayload = {
         url: youtubeUrl,
         downloadMode: 'audio',
         audioFormat: 'mp3'
       };
 
-      const cobaltRes = await fetch('https://api.cobalt.tools/', {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-        },
-        body: JSON.stringify(cobaltPayload)
-      });
+      let cobaltData = null;
 
-      if (!cobaltRes.ok) {
-        const errText = await cobaltRes.text();
-        console.error('Cobalt API Error:', errText);
-        throw new Error('音频提取服务(Cobalt)暂时不可用，请稍后再试');
+      for (const node of COBALT_NODES) {
+        try {
+          console.log(`Trying Cobalt node: ${node}`);
+          
+          // 设置 15 秒超时
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+          const cobaltRes = await fetch(node, {
+            method: 'POST',
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
+            },
+            body: JSON.stringify(cobaltPayload),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+
+          if (!cobaltRes.ok) {
+            const errText = await cobaltRes.text();
+            console.warn(`Node ${node} failed with status ${cobaltRes.status}: ${errText}`);
+            continue; // 尝试下一个节点
+          }
+
+          const data = await cobaltRes.json();
+          if (data.status === 'error') {
+            console.warn(`Node ${node} returned error: ${data.text || '未知错误'}`);
+            continue; // 尝试下一个节点
+          }
+
+          cobaltData = data;
+          break; // 成功获取，跳出循环
+        } catch (err) {
+          console.warn(`Node ${node} request failed or timed out: ${err.message}`);
+          continue; // 尝试下一个节点
+        }
       }
 
-      const cobaltData = await cobaltRes.json();
-      if (cobaltData.status === 'error') {
-        throw new Error(`Cobalt 提取失败: ${cobaltData.text || '未知错误'}`);
+      if (!cobaltData || !cobaltData.url) {
+        throw new Error('所有音频解析节点均不可用');
       }
       
       targetAudioUrl = cobaltData.url;
