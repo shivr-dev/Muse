@@ -6,7 +6,7 @@
     <title>Spotify Style Player</title>
     <!-- 使用国内可访问的 CDN 引入 Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
-    <link rel="stylesheet" href="/src/style.css">
+    <link rel="stylesheet" href="./src/style.css">
 </head>
 <body>
     <div id="app" class="mode-standard">
@@ -33,6 +33,7 @@
             <header>
                 <h2>我的歌单</h2>
                 <div class="actions">
+                    <button id="btn-import" class="btn-primary" title="导入数据"><i data-lucide="import"></i> 导入数据</button>
                     <button id="btn-mode-standard" class="active" title="标准模式"><i data-lucide="layout-grid"></i></button>
                     <button id="btn-mode-full" title="全屏模式"><i data-lucide="maximize"></i></button>
                     <button id="btn-mode-mini" title="小窗模式"><i data-lucide="minimize-2"></i></button>
@@ -79,7 +80,7 @@
     </div>
 
     <!-- 业务逻辑 -->
-    <script type="module" src="/src/supabase-config.js"></script>
-    <script type="module" src="/src/app.js"></script>
+    <script type="module" src="./src/supabase-config.js"></script>
+    <script type="module" src="./src/app.js"></script>
 </body>
 </html>

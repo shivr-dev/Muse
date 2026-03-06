@@ -45,6 +45,22 @@ button:hover {
     color: var(--text-primary);
 }
 
+/* 主要按钮样式 (导入按钮) */
+.btn-primary {
+    background-color: var(--accent-color);
+    color: #000;
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 600;
+    gap: 8px;
+}
+
+.btn-primary:hover {
+    transform: scale(1.05);
+    color: #000;
+}
+
 /* =========================================
    标准模式 (Standard Mode)
    ========================================= */

@@ -18,6 +18,7 @@ const timeTotal = document.getElementById('time-total');
 const volumeSlider = document.getElementById('volume-slider');
 const trackListEl = document.getElementById('track-list');
 const pipBtn = document.getElementById('btn-pip');
+const importBtn = document.getElementById('btn-import');
 
 // 初始化
 async function init() {
@@ -303,6 +304,52 @@ function setupEventListeners() {
     
     // 画中画悬浮窗
     pipBtn.addEventListener('click', togglePiP);
+
+    // 导入数据
+    if (importBtn) {
+        importBtn.addEventListener('click', importMockData);
+    }
+}
+
+// 导入测试数据
+async function importMockData() {
+    const input = prompt("请输入包含 Spotify 数据的 JSON 数组（留空则导入默认测试数据）：");
+    let dataToImport = [];
+    
+    if (input) {
+        try {
+            dataToImport = JSON.parse(input);
+            if (!Array.isArray(dataToImport)) throw new Error("必须是 JSON 数组");
+        } catch (e) {
+            alert("JSON 格式错误：" + e.message);
+            return;
+        }
+    } else {
+        dataToImport = [
+            { title: "Shape of You", artist: "Ed Sheeran", album_cover_url: "https://picsum.photos/seed/shape/400/400", position: 1 },
+            { title: "Blinding Lights", artist: "The Weeknd", album_cover_url: "https://picsum.photos/seed/blinding/400/400", position: 2 },
+            { title: "Dance Monkey", artist: "Tones and I", album_cover_url: "https://picsum.photos/seed/dance/400/400", position: 3 }
+        ];
+    }
+
+    try {
+        importBtn.innerHTML = `<i data-lucide="loader" class="spin"></i> 导入中...`;
+        importBtn.disabled = true;
+        lucide.createIcons();
+
+        const { error } = await supabase.from('tracks').insert(dataToImport);
+        if (error) throw error;
+
+        alert('导入成功！');
+        await fetchTracks();
+    } catch (err) {
+        console.error('导入失败:', err);
+        alert('导入失败: ' + err.message);
+    } finally {
+        importBtn.innerHTML = `<i data-lucide="import"></i> 导入数据`;
+        importBtn.disabled = false;
+        lucide.createIcons();
+    }
 }
 
 // 格式化时间
