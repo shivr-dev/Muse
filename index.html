@@ -33,10 +33,11 @@
             <header>
                 <h2>我的歌单</h2>
                 <div class="actions">
-                    <button id="btn-import" class="btn-primary" title="导入数据"><i data-lucide="import"></i> 导入数据</button>
-                    <button id="btn-mode-standard" class="active" title="标准模式"><i data-lucide="layout-grid"></i></button>
-                    <button id="btn-mode-full" title="全屏模式"><i data-lucide="maximize"></i></button>
-                    <button id="btn-mode-mini" title="小窗模式"><i data-lucide="minimize-2"></i></button>
+                    <button id="btn-import" class="btn-primary" title="导入数据 (I)"><i data-lucide="import"></i> 导入数据</button>
+                    <button id="btn-mode-standard" class="active" title="标准模式 (S)"><i data-lucide="layout-grid"></i></button>
+                    <button id="btn-mode-full" title="全屏模式 (F)"><i data-lucide="maximize"></i></button>
+                    <button id="btn-mode-lyrics" title="歌词模式 (L)"><i data-lucide="mic-2"></i></button>
+                    <button id="btn-mode-mini" title="小窗模式 (M)"><i data-lucide="minimize-2"></i></button>
                 </div>
             </header>
             <div id="track-list" class="track-list">
@@ -46,6 +47,11 @@
 
         <!-- 底部控制栏 -->
         <footer id="player-bar">
+            <!-- 返回按钮 (仅在全屏/歌词/小窗模式下显示) -->
+            <button id="btn-exit-mode" class="btn-exit-mode" title="返回标准模式 (ESC)" style="display: none;">
+                <i data-lucide="arrow-left"></i>
+            </button>
+
             <div class="now-playing">
                 <img id="cover-img" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7" alt="cover">
                 <div class="track-info">
@@ -77,6 +83,13 @@
         <!-- 隐藏的 Canvas，用于生成画中画视频流 -->
         <canvas id="pip-canvas" width="512" height="512" style="display: none;"></canvas>
         <video id="pip-video" muted playsinline style="display: none;"></video>
+
+        <!-- 歌词面板 -->
+        <div id="lyrics-panel" class="lyrics-panel" style="display: none;">
+            <div class="lyrics-container" id="lyrics-container">
+                <div class="lyrics-placeholder">暂无歌词</div>
+            </div>
+        </div>
     </div>
 
     <!-- 业务逻辑 -->

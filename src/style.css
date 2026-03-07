@@ -441,15 +441,9 @@ header h2 {
     width: auto;
 }
 
-/* 退出全屏按钮 */
+/* 退出全屏按钮 (已移除伪元素) */
 #app.mode-full::before {
-    content: '退出全屏 (ESC)';
-    position: absolute;
-    top: 40px;
-    left: 40px;
-    color: rgba(255,255,255,0.5);
-    z-index: 2;
-    cursor: pointer;
+    display: none;
 }
 
 /* =========================================
@@ -518,13 +512,260 @@ header h2 {
     display: none;
 }
 
-/* 恢复标准模式按钮 */
+/* 恢复标准模式按钮 (已移除伪元素) */
 #app.mode-mini::after {
-    content: '↗';
+    display: none;
+}
+
+/* =========================================
+   退出模式按钮 (返回键)
+   ========================================= */
+.btn-exit-mode {
     position: absolute;
-    top: 8px;
-    right: 8px;
-    color: var(--text-secondary);
+    top: 40px;
+    left: 40px;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 50%;
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    z-index: 10;
+    backdrop-filter: blur(10px);
+}
+
+.btn-exit-mode:hover {
+    background: rgba(0, 0, 0, 0.8);
+    transform: scale(1.1);
+}
+
+#app.mode-mini .btn-exit-mode {
+    top: 50%;
+    left: -20px;
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+}
+
+#app.mode-mini .btn-exit-mode:hover {
+    transform: translateY(-50%) scale(1.1);
+}
+
+/* =========================================
+   歌词模式 (Lyrics Mode)
+   ========================================= */
+#app.mode-lyrics {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    position: relative;
+}
+
+#app.mode-lyrics #sidebar,
+#app.mode-lyrics #main-content {
+    display: none;
+}
+
+#app.mode-lyrics #bg-blur {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-size: cover;
+    background-position: center;
+    filter: blur(80px) brightness(0.3);
+    z-index: 0;
+    transition: background-image 0.5s ease;
+}
+
+#app.mode-lyrics #player-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: transparent;
+    border: none;
+    z-index: 1;
+    padding: 20px 40px;
+}
+
+.lyrics-panel {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: calc(100vh - 120px);
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.lyrics-container {
+    width: 80%;
+    max-width: 800px;
+    height: 80%;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+    mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+    padding: 50px 0;
+}
+
+/* 隐藏滚动条 */
+.lyrics-container::-webkit-scrollbar {
+    display: none;
+}
+.lyrics-container {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.lyric-line {
+    font-size: 28px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.4);
+    text-align: center;
+    margin-bottom: 24px;
+    transition: all 0.3s ease;
     cursor: pointer;
-    font-size: 16px;
+}
+
+.lyric-line:hover {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.lyric-line.active {
+    color: #fff;
+    font-size: 36px;
+    text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+    transform: scale(1.05);
+}
+
+.lyric-translation {
+    font-size: 18px;
+    font-weight: 400;
+    margin-top: 8px;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.lyric-line.active .lyric-translation {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.lyrics-placeholder {
+    font-size: 24px;
+    color: rgba(255, 255, 255, 0.5);
+    text-align: center;
+    margin-top: 20vh;
+}
+
+/* =========================================
+   响应式适配 (Responsive Design)
+   ========================================= */
+@media (max-width: 768px) {
+    #app.mode-standard {
+        display: flex;
+        flex-direction: column;
+    }
+    
+    #sidebar {
+        width: 100%;
+        padding: 12px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-right: none;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    #sidebar .logo {
+        margin-bottom: 0;
+        font-size: 20px;
+    }
+    
+    #sidebar nav ul {
+        display: flex;
+        gap: 16px;
+    }
+    
+    #sidebar nav li {
+        margin-bottom: 0;
+        padding: 8px;
+        font-size: 14px;
+    }
+    
+    #main-content {
+        flex: 1;
+        padding: 16px;
+        overflow-y: auto;
+    }
+    
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+    }
+    
+    .actions {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 8px;
+    }
+    
+    #player-bar {
+        flex-direction: column;
+        height: auto;
+        padding: 12px;
+        gap: 12px;
+    }
+    
+    .now-playing {
+        width: 100%;
+    }
+    
+    .player-controls {
+        width: 100%;
+    }
+    
+    .extra-controls {
+        display: none; /* 移动端隐藏音量控制以节省空间 */
+    }
+    
+    /* 全屏和歌词模式适配 */
+    #app.mode-full #player-bar,
+    #app.mode-lyrics #player-bar {
+        padding: 20px;
+    }
+    
+    #app.mode-full .now-playing img {
+        width: 250px;
+        height: 250px;
+    }
+    
+    #app.mode-full .now-playing #track-title {
+        font-size: 24px;
+    }
+    
+    .btn-exit-mode {
+        top: 20px;
+        left: 20px;
+    }
+    
+    .lyric-line {
+        font-size: 20px;
+    }
+    
+    .lyric-line.active {
+        font-size: 26px;
+    }
+    
+    .lyric-translation {
+        font-size: 14px;
+    }
 }
