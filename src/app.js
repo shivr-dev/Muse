@@ -72,7 +72,7 @@ function showEmptyState() {
 
 // 渲染歌曲列表
 function renderTrackList() {
-    trackListEl.innerHTML = '';
+    trackListEl.innerHTML = '<div style="padding: 10px 20px; color: #a0a0a0; font-size: 13px; text-align: center; background: rgba(255,255,255,0.05); border-radius: 8px; margin-bottom: 15px;">由于云端限制，请复制链接通过快捷指令下载后上传。</div>';
     tracks.forEach((track, index) => {
         const item = document.createElement('div');
         item.className = 'track-item';
@@ -80,9 +80,15 @@ function renderTrackList() {
         // 判断是否已同步
         const syncStatusHtml = track.is_synced 
             ? `<span class="status-synced"><i data-lucide="check-circle"></i> 已就绪</span>`
-            : `<button class="btn-sync" data-id="${track.id}" data-index="${index}">
-                 <i data-lucide="cloud-download"></i> 同步音源
-               </button>`;
+            : `<div style="display: flex; gap: 8px;">
+                 <button class="btn-copy" data-id="${track.id}" data-index="${index}" style="display: flex; align-items: center; gap: 4px; background: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                   <i data-lucide="link" style="width: 14px; height: 14px;"></i> 复制链接
+                 </button>
+                 <button class="btn-upload" data-id="${track.id}" data-index="${index}" style="display: flex; align-items: center; gap: 4px; background: #1DB954; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                   <i data-lucide="upload" style="width: 14px; height: 14px;"></i> 上传 MP3
+                 </button>
+                 <input type="file" id="file-upload-${index}" accept="audio/*" style="display: none;">
+               </div>`;
 
         item.innerHTML = `
             <div class="index">${index + 1}</div>
@@ -107,16 +113,103 @@ function renderTrackList() {
             if (track.is_synced) {
                 playTrack(index);
             } else {
-                alert('请先点击同步音源！');
+                alert('请先上传本地音频！');
             }
         });
 
-        // 绑定同步按钮事件
-        const syncBtn = item.querySelector('.btn-sync');
-        if (syncBtn) {
-            syncBtn.addEventListener('click', (e) => {
+        // 绑定复制链接按钮事件
+        const copyBtn = item.querySelector('.btn-copy');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', async (e) => {
                 e.stopPropagation();
-                syncTrack(track.id, track.title, track.artist, syncBtn, index);
+                copyBtn.innerHTML = `<i data-lucide="loader" class="spin" style="width: 14px; height: 14px;"></i> 获取中...`;
+                lucide.createIcons();
+                
+                try {
+                    // 优先使用数据库中已有的 source_url
+                    let urlToCopy = track.source_url;
+                    
+                    // 如果没有 source_url，或者不是 youtube 链接，则生成一个 YouTube 搜索链接
+                    if (!urlToCopy || !urlToCopy.includes('youtube.com')) {
+                        const query = encodeURIComponent(`${track.title} ${track.artist} audio`);
+                        urlToCopy = `https://www.youtube.com/results?search_query=${query}`;
+                    }
+                    
+                    await navigator.clipboard.writeText(urlToCopy);
+                    copyBtn.innerHTML = `<i data-lucide="check" style="width: 14px; height: 14px;"></i> 已复制`;
+                } catch (err) {
+                    console.error('获取链接失败:', err);
+                    alert('获取链接失败: ' + err.message);
+                    copyBtn.innerHTML = `<i data-lucide="link" style="width: 14px; height: 14px;"></i> 复制链接`;
+                }
+                lucide.createIcons();
+                
+                // 2秒后恢复按钮状态
+                setTimeout(() => {
+                    if (copyBtn.innerHTML.includes('已复制')) {
+                        copyBtn.innerHTML = `<i data-lucide="link" style="width: 14px; height: 14px;"></i> 复制链接`;
+                        lucide.createIcons();
+                    }
+                }, 2000);
+            });
+        }
+
+        // 绑定上传按钮事件
+        const uploadBtn = item.querySelector('.btn-upload');
+        const fileInput = item.querySelector(`#file-upload-${index}`);
+        if (uploadBtn && fileInput) {
+            uploadBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                fileInput.click();
+            });
+
+            fileInput.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                try {
+                    uploadBtn.innerHTML = `<i data-lucide="loader" class="spin" style="width: 14px; height: 14px;"></i> 上传中...`;
+                    uploadBtn.disabled = true;
+                    lucide.createIcons();
+
+                    // 生成唯一文件名
+                    const fileExt = file.name.split('.').pop();
+                    const filePath = `${crypto.randomUUID()}.${fileExt}`;
+
+                    // 上传到 Supabase Storage (audio bucket)
+                    const { error: uploadError } = await supabase.storage
+                        .from('audio')
+                        .upload(filePath, file, {
+                            cacheControl: '3600',
+                            upsert: false
+                        });
+
+                    if (uploadError) throw uploadError;
+
+                    // 更新数据库
+                    const { error: dbError } = await supabase
+                        .from('tracks')
+                        .update({ is_synced: true, file_path: filePath })
+                        .eq('id', track.id);
+
+                    if (dbError) throw dbError;
+
+                    // 更新本地状态并重新渲染
+                    tracks[index].is_synced = true;
+                    tracks[index].file_path = filePath;
+                    renderTrackList();
+
+                    // 如果当前没有播放歌曲，自动加载刚同步的这首
+                    if (currentTrackIndex === -1) {
+                        loadTrack(index);
+                    }
+                } catch (err) {
+                    console.error('上传失败:', err);
+                    alert('上传失败: ' + err.message);
+                    uploadBtn.innerHTML = `<i data-lucide="upload" style="width: 14px; height: 14px;"></i> 上传 MP3`;
+                    uploadBtn.disabled = false;
+                    lucide.createIcons();
+                }
             });
         }
 
@@ -203,7 +296,7 @@ async function deleteTrack(id, index, filePath) {
 }
 
 // 加载歌曲信息
-function loadTrack(index) {
+async function loadTrack(index) {
     if (index < 0 || index >= tracks.length) return;
     const track = tracks[index];
     if (!track.is_synced) return; // 未同步的歌曲不能加载
@@ -220,9 +313,16 @@ function loadTrack(index) {
     // 全屏模式背景更新
     document.getElementById('bg-blur').style.backgroundImage = `url(${coverUrl})`;
 
-    // 获取音频 URL
-    const { data } = supabase.storage.from('audio').getPublicUrl(track.file_path);
-    audio.src = data.publicUrl;
+    // 获取音频 URL (使用 createSignedUrl 确保私有 bucket 也能访问)
+    const { data, error } = await supabase.storage.from('audio').createSignedUrl(track.file_path, 3600);
+    if (error) {
+        console.error('获取音频链接失败:', error);
+        // 如果获取签名链接失败，尝试使用公开链接作为 fallback
+        const publicData = supabase.storage.from('audio').getPublicUrl(track.file_path);
+        audio.src = publicData.data.publicUrl;
+    } else {
+        audio.src = data.signedUrl;
+    }
 
     // 更新列表高亮
     document.querySelectorAll('.track-item').forEach((el, i) => {
@@ -236,7 +336,7 @@ function loadTrack(index) {
 // 播放指定歌曲
 async function playTrack(index) {
     if (currentTrackIndex !== index) {
-        loadTrack(index);
+        await loadTrack(index);
     }
     try {
         await audio.play();
