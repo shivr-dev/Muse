@@ -718,104 +718,51 @@ function switchMode(mode) {
 async function fetchLyrics(trackId, title, artist, index) {
     try {
         console.log('开始获取歌词:', title, artist);
-        let lyricsData = [];
-
-        // 第一步：LRCLIB 获取原文
-        const query = encodeURIComponent(`${title} ${artist}`);
-        const res = await fetch(`https://lrclib.net/api/search?q=${query}`);
-        const data = await res.json();
         
-        if (data && data.length > 0 && data[0].syncedLyrics) {
-            lyricsData = parseLRC(data[0].syncedLyrics);
+        showToast(`<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> 正在智能解析《${title}》的歌词...`);
+        lucide.createIcons();
+        
+        // 调用 Supabase Edge Function 处理完整流程
+        const { data, error } = await supabase.functions.invoke('process-lyrics', {
+            body: { title, artist }
+        });
+
+        if (error) {
+            console.error('Edge Function Error:', error);
+            throw error;
         }
 
-        if (lyricsData.length === 0) {
-            console.log('未找到歌词，跳过');
-            return;
-        }
-
-        // 第二步：网易云获取翻译
-        try {
-            const wyQuery = encodeURIComponent(`${title} ${artist}`);
-            const wySearchUrl = `https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${wyQuery}&type=1&offset=0&total=true&limit=1`;
-            const wyRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(wySearchUrl)}`);
-            const wyData = await wyRes.json();
+        if (data && data.lyricsData && data.lyricsData.length > 0) {
+            const lyricsData = data.lyricsData;
+            console.log(`歌词获取成功，来源: ${data.source}`);
             
-            if (wyData.result && wyData.result.songs && wyData.result.songs.length > 0) {
-                const songId = wyData.result.songs[0].id;
-                const wyLyricUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`;
-                const wyLyricRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(wyLyricUrl)}`);
-                const wyLyricData = await wyLyricRes.json();
+            // 更新数据库
+            const { error: dbError } = await supabase
+                .from('tracks')
+                .update({ lyrics: lyricsData })
+                .eq('id', trackId);
                 
-                if (wyLyricData.tlyric && wyLyricData.tlyric.lyric) {
-                    const transLines = parseLRC(wyLyricData.tlyric.lyric);
-                    // 匹配时间戳合并翻译
-                    transLines.forEach(t => {
-                        const match = lyricsData.find(l => Math.abs(l.time - t.time) < 1.0);
-                        if (match) match.translation = t.text;
-                    });
-                }
-            }
-        } catch (wyErr) {
-            console.error('获取网易云翻译失败:', wyErr);
-        }
-
-        // 第三步：大模型补全 (读音/翻译)
-        const needsTranslation = lyricsData.some(l => !l.translation);
-        // 简单判断是否可能需要罗马音 (非纯中文/英文)
-        const sampleText = lyricsData.map(l => l.text).join(' ');
-        const mightNeedRomaji = /[ぁ-んァ-ン一-龯가-힣]/.test(sampleText);
-
-        if (needsTranslation || mightNeedRomaji) {
-            try {
-                console.log('调用 Supabase Edge Function (Cloudflare AI) 补全歌词...');
-                showToast(`<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> 正在智能解析《${title}》的歌词...`);
-                lucide.createIcons();
-                
-                const { data, error } = await supabase.functions.invoke('process-lyrics', {
-                    body: { lyricsData }
-                });
-
-                if (error) throw error;
-
-                if (data && data.enrichedLyrics) {
-                    const enrichedLyrics = data.enrichedLyrics;
-                    if (Array.isArray(enrichedLyrics) && enrichedLyrics.length > 0) {
-                        // 合并回原数组
-                        enrichedLyrics.forEach(e => {
-                            const match = lyricsData.find(l => l.time === e.time);
-                            if (match) {
-                                if (e.romaji) match.romaji = e.romaji;
-                                if (e.translation) match.translation = e.translation;
-                            }
-                        });
-                    }
-                    showToast(`<i data-lucide="check-circle" style="width: 16px; height: 16px; color: #1DB954;"></i> 《${title}》歌词解析完成！`);
-                    lucide.createIcons();
-                }
-            } catch (llmErr) {
-                console.error('大模型补全失败，已回退到仅网易云翻译:', llmErr);
-            }
-        }
-
-        // 更新数据库
-        const { error } = await supabase
-            .from('tracks')
-            .update({ lyrics: lyricsData })
-            .eq('id', trackId);
+            if (dbError) throw dbError;
             
-        if (error) throw error;
-        
-        // 更新本地状态
-        tracks[index].lyrics = lyricsData;
-        console.log('歌词获取并处理成功');
-        
-        // 如果当前正在播放这首歌，刷新歌词显示
-        if (currentTrackIndex === index) {
-            renderLyrics();
+            // 更新本地状态
+            tracks[index].lyrics = lyricsData;
+            
+            showToast(`<i data-lucide="check-circle" style="width: 16px; height: 16px; color: #1DB954;"></i> 《${data.cleanTitle || title}》歌词解析完成！`);
+            lucide.createIcons();
+            
+            // 如果当前正在播放这首歌，刷新歌词显示
+            if (currentTrackIndex === index) {
+                renderLyrics();
+            }
+        } else {
+            console.log('未找到或生成任何歌词');
+            showToast(`<i data-lucide="info" style="width: 16px; height: 16px;"></i> 未找到《${title}》的歌词`);
+            lucide.createIcons();
         }
     } catch (err) {
         console.error('获取歌词流程异常:', err);
+        showToast(`<i data-lucide="alert-circle" style="width: 16px; height: 16px; color: #ff4444;"></i> 歌词解析失败`);
+        lucide.createIcons();
     }
 }
 
