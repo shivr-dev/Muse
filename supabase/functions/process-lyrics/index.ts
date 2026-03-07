@@ -5,6 +5,43 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+// 辅助函数：提取 JSON 或 LRC，过滤掉 <think> 标签
+function extractCleanContent(text) {
+  if (!text) return '';
+  // 移除 <think>...</think> 标签及其内容
+  let cleanText = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  
+  // 尝试匹配 markdown 代码块
+  const jsonMatch = cleanText.match(/```(?:json)?\n([\s\S]*?)\n```/);
+  if (jsonMatch) {
+    return jsonMatch[1].trim();
+  }
+  
+  // 如果是找 JSON 数组，尝试匹配最外层的 []
+  const startArr = cleanText.indexOf('[');
+  const endArr = cleanText.lastIndexOf(']');
+  if (startArr !== -1 && endArr !== -1 && endArr > startArr) {
+    // 简单判断一下是不是 LRC 格式（LRC 也有 []）
+    // 如果包含 "time" 和 "text"，大概率是 JSON
+    const substring = cleanText.substring(startArr, endArr + 1);
+    if (substring.includes('"time"') || substring.includes('"text"')) {
+        return substring;
+    }
+  }
+  
+  // 如果是找 JSON 对象，尝试匹配最外层的 {}
+  const startObj = cleanText.indexOf('{');
+  const endObj = cleanText.lastIndexOf('}');
+  if (startObj !== -1 && endObj !== -1 && endObj > startObj) {
+      const substring = cleanText.substring(startObj, endObj + 1);
+      if (substring.includes('"title"') || substring.includes('"artist"')) {
+          return substring;
+      }
+  }
+
+  return cleanText;
+}
+
 // 辅助函数：调用 Cloudflare AI
 async function callCloudflareAI(accountId, apiToken, systemPrompt, userPrompt) {
   const response = await fetch(
@@ -91,7 +128,7 @@ serve(async (req) => {
     try {
       let cleanRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a music metadata cleaner. Return ONLY valid JSON.', cleanPrompt)
       if (cleanRes) {
-        cleanRes = cleanRes.replace(/```json/g, '').replace(/```/g, '').trim()
+        cleanRes = extractCleanContent(cleanRes)
         const cleanData = JSON.parse(cleanRes)
         if (cleanData.title) cleanTitle = cleanData.title
         if (cleanData.artist) cleanArtist = cleanData.artist
@@ -121,13 +158,19 @@ serve(async (req) => {
     // 3. 如果 API 返回为空，调用大模型背诵
     if (lyricsData.length === 0) {
       console.log('API returned empty. Trying AI Memory fallback...')
-      const recitePrompt = `你现在是一个音乐数据库。请根据歌名 "${cleanTitle}" 和歌手 "${cleanArtist}"，直接输出该歌曲的完整 LRC 格式歌词（带 [00:00.00] 时间戳）。如果这首歌非常有名，请凭你的知识库背诵出来。请只输出歌词内容，不要有任何开场白。`
+      const recitePrompt = `你现在是一个严谨的音乐数据库。请根据歌名 "${cleanTitle}" 和歌手 "${cleanArtist}"，输出该歌曲的完整 LRC 格式歌词（带 [00:00.00] 时间戳）。\n\n⚠️ 警告：如果你不知道这首歌的准确歌词，或者记忆模糊，请直接回复 "UNKNOWN"，绝对不要自己瞎编或创作歌词！\n\n如果确信知道，请只输出 LRC 歌词内容，不要有任何开场白。`
       try {
-        const aiLrc = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a music database.', recitePrompt)
-        lyricsData = parseLRC(aiLrc)
-        if (lyricsData.length > 0) {
-          source = '[AI Memory Source]'
-          console.log(`${source} AI recited lyrics successfully`)
+        let aiLrc = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a strict music database. Never hallucinate.', recitePrompt)
+        aiLrc = extractCleanContent(aiLrc)
+        
+        if (aiLrc.includes('UNKNOWN') || aiLrc.trim() === '') {
+            console.log('AI does not know the lyrics. Skipping to avoid hallucination.')
+        } else {
+            lyricsData = parseLRC(aiLrc)
+            if (lyricsData.length > 0) {
+              source = '[AI Memory Source]'
+              console.log(`${source} AI recited lyrics successfully`)
+            }
         }
       } catch (e) {
         console.error('AI Memory fallback failed:', e)
@@ -187,7 +230,7 @@ serve(async (req) => {
       try {
         let enrichRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a helpful assistant that outputs ONLY valid JSON arrays.', enrichPrompt)
         if (enrichRes) {
-          enrichRes = enrichRes.replace(/```json/g, '').replace(/```/g, '').trim()
+          enrichRes = extractCleanContent(enrichRes)
           const enrichedLyrics = JSON.parse(enrichRes)
           
           if (Array.isArray(enrichedLyrics) && enrichedLyrics.length > 0) {
