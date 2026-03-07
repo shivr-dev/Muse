@@ -28,7 +28,17 @@ async function callCloudflareAI(accountId, apiToken, systemPrompt, userPrompt) {
     console.error('Cloudflare AI Error:', result.errors)
     throw new Error('Cloudflare AI request failed')
   }
-  return result.result.response
+  
+  // 兼容不同模型的返回格式
+  let responseText = result.result?.response || result.result;
+  if (typeof responseText !== 'string') {
+      try {
+          responseText = JSON.stringify(responseText);
+      } catch (e) {
+          responseText = String(responseText);
+      }
+  }
+  return responseText || '';
 }
 
 // 辅助函数：解析 LRC
@@ -59,7 +69,7 @@ serve(async (req) => {
   }
 
   try {
-    const { title: rawTitle, artist: rawArtist } = await req.json()
+    const { title: rawTitle = '', artist: rawArtist = '' } = await req.json()
 
     const CF_ACCOUNT_ID = Deno.env.get('CF_ACCOUNT_ID')
     const CF_API_TOKEN = Deno.env.get('CF_API_TOKEN')
@@ -76,15 +86,17 @@ serve(async (req) => {
     Fix any typos, remove unnecessary tags (like LIVE, MP3, Official, etc.).
     Return ONLY a JSON object: { "title": "Clean Title", "artist": "Clean Artist" }
     `
-    let cleanTitle = rawTitle
-    let cleanArtist = rawArtist
+    let cleanTitle = rawTitle || 'Unknown Title'
+    let cleanArtist = rawArtist || 'Unknown Artist'
     try {
       let cleanRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a music metadata cleaner. Return ONLY valid JSON.', cleanPrompt)
-      cleanRes = cleanRes.replace(/```json/g, '').replace(/```/g, '').trim()
-      const cleanData = JSON.parse(cleanRes)
-      if (cleanData.title) cleanTitle = cleanData.title
-      if (cleanData.artist) cleanArtist = cleanData.artist
-      console.log(`[Metadata Cleaned] ${cleanTitle} - ${cleanArtist}`)
+      if (cleanRes) {
+        cleanRes = cleanRes.replace(/```json/g, '').replace(/```/g, '').trim()
+        const cleanData = JSON.parse(cleanRes)
+        if (cleanData.title) cleanTitle = cleanData.title
+        if (cleanData.artist) cleanArtist = cleanData.artist
+        console.log(`[Metadata Cleaned] ${cleanTitle} - ${cleanArtist}`)
+      }
     } catch (e) {
       console.warn('[Metadata Clean Failed] Using raw inputs.', e)
     }
@@ -174,18 +186,20 @@ serve(async (req) => {
       `
       try {
         let enrichRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a helpful assistant that outputs ONLY valid JSON arrays.', enrichPrompt)
-        enrichRes = enrichRes.replace(/```json/g, '').replace(/```/g, '').trim()
-        const enrichedLyrics = JSON.parse(enrichRes)
-        
-        if (Array.isArray(enrichedLyrics) && enrichedLyrics.length > 0) {
-          enrichedLyrics.forEach(e => {
-              const match = lyricsData.find(l => l.time === e.time)
-              if (match) {
-                  if (e.romaji) match.romaji = e.romaji
-                  if (e.translation) match.translation = e.translation
-              }
-          })
-          console.log('AI completion merged.')
+        if (enrichRes) {
+          enrichRes = enrichRes.replace(/```json/g, '').replace(/```/g, '').trim()
+          const enrichedLyrics = JSON.parse(enrichRes)
+          
+          if (Array.isArray(enrichedLyrics) && enrichedLyrics.length > 0) {
+            enrichedLyrics.forEach(e => {
+                const match = lyricsData.find(l => l.time === e.time)
+                if (match) {
+                    if (e.romaji) match.romaji = e.romaji
+                    if (e.translation) match.translation = e.translation
+                }
+            })
+            console.log('AI completion merged.')
+          }
         }
       } catch (e) {
         console.error('AI completion failed:', e)
