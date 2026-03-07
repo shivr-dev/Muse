@@ -8,37 +8,19 @@ const corsHeaders = {
 // 辅助函数：提取 JSON 或 LRC，过滤掉 <think> 标签
 function extractCleanContent(text) {
   if (!text) return '';
-  // 移除 <think>...</think> 标签及其内容
   let cleanText = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
   
-  // 尝试匹配 markdown 代码块
   const jsonMatch = cleanText.match(/```(?:json)?\n([\s\S]*?)\n```/);
-  if (jsonMatch) {
-    return jsonMatch[1].trim();
-  }
+  if (jsonMatch) return jsonMatch[1].trim();
   
-  // 如果是找 JSON 数组，尝试匹配最外层的 []
   const startArr = cleanText.indexOf('[');
   const endArr = cleanText.lastIndexOf(']');
   if (startArr !== -1 && endArr !== -1 && endArr > startArr) {
-    // 简单判断一下是不是 LRC 格式（LRC 也有 []）
-    // 如果包含 "time" 和 "text"，大概率是 JSON
     const substring = cleanText.substring(startArr, endArr + 1);
     if (substring.includes('"time"') || substring.includes('"text"')) {
         return substring;
     }
   }
-  
-  // 如果是找 JSON 对象，尝试匹配最外层的 {}
-  const startObj = cleanText.indexOf('{');
-  const endObj = cleanText.lastIndexOf('}');
-  if (startObj !== -1 && endObj !== -1 && endObj > startObj) {
-      const substring = cleanText.substring(startObj, endObj + 1);
-      if (substring.includes('"title"') || substring.includes('"artist"')) {
-          return substring;
-      }
-  }
-
   return cleanText;
 }
 
@@ -66,7 +48,6 @@ async function callCloudflareAI(accountId, apiToken, systemPrompt, userPrompt) {
     throw new Error('Cloudflare AI request failed')
   }
   
-  // 兼容不同模型的返回格式
   let responseText = result.result?.response || result.result;
   if (typeof responseText !== 'string') {
       try {
@@ -78,7 +59,7 @@ async function callCloudflareAI(accountId, apiToken, systemPrompt, userPrompt) {
   return responseText || '';
 }
 
-// 辅助函数：解析 LRC
+// 辅助函数：解析 LRC (Fallback)
 function parseLRC(lrc) {
   if (!lrc) return [];
   const lines = lrc.split('\n');
@@ -100,6 +81,38 @@ function parseLRC(lrc) {
   return result;
 }
 
+// 辅助函数：清洗歌名和歌手
+function cleanString(str) {
+  if (!str) return '';
+  return str.replace(/\.(mp3|flac|wav|m4a)$/i, '')
+            .replace(/[\(\[\{](live|mv|official|lyric|audio|video|official video)[\)\]\}]/gi, '')
+            .replace(/[-_]/g, ' ')
+            .trim();
+}
+
+// 辅助函数：带 TextDecoder 的 Fetch，解决乱码
+async function fetchWithDecoder(url) {
+  console.log(`[API Request] ${url}`);
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    if (!res.ok) {
+      console.warn(`[API Request Failed] Status: ${res.status}`);
+      return null;
+    }
+    const arrayBuffer = await res.arrayBuffer();
+    const decoder = new TextDecoder("utf-8");
+    const text = decoder.decode(arrayBuffer);
+    return JSON.parse(text);
+  } catch (e) {
+    console.error(`[API Request Error] ${url}`, e.message);
+    return null;
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -117,140 +130,122 @@ serve(async (req) => {
 
     console.log(`[Process Lyrics] Start processing for: ${rawTitle} - ${rawArtist}`)
 
-    // 1. 文件名自动修正
-    const cleanPrompt = `
-    Please extract the clean song title and artist from the following raw string: "${rawTitle} ${rawArtist}".
-    Fix any typos, remove unnecessary tags (like LIVE, MP3, Official, etc.).
-    Return ONLY a JSON object: { "title": "Clean Title", "artist": "Clean Artist" }
-    `
-    let cleanTitle = rawTitle || 'Unknown Title'
-    let cleanArtist = rawArtist || 'Unknown Artist'
-    try {
-      let cleanRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a music metadata cleaner. Return ONLY valid JSON.', cleanPrompt)
-      if (cleanRes) {
-        cleanRes = extractCleanContent(cleanRes)
-        const cleanData = JSON.parse(cleanRes)
-        if (cleanData.title) cleanTitle = cleanData.title
-        if (cleanData.artist) cleanArtist = cleanData.artist
-        console.log(`[Metadata Cleaned] ${cleanTitle} - ${cleanArtist}`)
+    // 1. 更聪明的清洗
+    const cleanedTitle = cleanString(rawTitle);
+    const cleanedArtist = cleanString(rawArtist);
+    const searchQuery = `${cleanedTitle} ${cleanedArtist}`.trim();
+    console.log(`[Cleaned Search Query] ${searchQuery}`);
+
+    let rawSyncedLyrics = null;
+    let rawPlainLyrics = null;
+    let source = '';
+
+    // 2. 优化 LRCLIB 调用
+    const lrclibUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(searchQuery)}`;
+    const lrclibData = await fetchWithDecoder(lrclibUrl);
+    
+    if (lrclibData && Array.isArray(lrclibData)) {
+      for (const item of lrclibData) {
+        if (item.syncedLyrics) {
+          rawSyncedLyrics = item.syncedLyrics;
+          source = '[LRCLIB Synced]';
+          console.log(`[LRCLIB] Found synced lyrics.`);
+          break;
+        } else if (item.plainLyrics && !rawPlainLyrics) {
+          rawPlainLyrics = item.plainLyrics;
+          source = '[LRCLIB Plain]';
+        }
       }
-    } catch (e) {
-      console.warn('[Metadata Clean Failed] Using raw inputs.', e)
     }
 
-    let lyricsData = []
-    let source = ''
-
-    // 2. 尝试 LRCLIB 抓取
-    try {
-      const query = encodeURIComponent(`${cleanTitle} ${cleanArtist}`)
-      const res = await fetch(`https://lrclib.net/api/search?q=${query}`)
-      const data = await res.json()
-      if (data && data.length > 0 && data[0].syncedLyrics) {
-        lyricsData = parseLRC(data[0].syncedLyrics)
-        source = '[API Source]'
-        console.log(`${source} Found lyrics in LRCLIB`)
-      }
-    } catch (e) {
-      console.warn('LRCLIB fetch failed:', e)
-    }
-
-    // 3. 如果 API 返回为空，调用大模型背诵
-    if (lyricsData.length === 0) {
-      console.log('API returned empty. Trying AI Memory fallback...')
-      const recitePrompt = `你现在是一个严谨的音乐数据库。请根据歌名 "${cleanTitle}" 和歌手 "${cleanArtist}"，输出该歌曲的完整 LRC 格式歌词（带 [00:00.00] 时间戳）。\n\n⚠️ 警告：如果你不知道这首歌的准确歌词，或者记忆模糊，请直接回复 "UNKNOWN"，绝对不要自己瞎编或创作歌词！\n\n如果确信知道，请只输出 LRC 歌词内容，不要有任何开场白。`
-      try {
-        let aiLrc = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a strict music database. Never hallucinate.', recitePrompt)
-        aiLrc = extractCleanContent(aiLrc)
+    // 3. 增加网易云兜底 (Netease)
+    if (!rawSyncedLyrics && !rawPlainLyrics) {
+      console.log(`[LRCLIB] No results. Trying NetEase...`);
+      const wyQuery = encodeURIComponent(searchQuery);
+      const wySearchUrl = `https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${wyQuery}&type=1&offset=0&total=true&limit=1`;
+      const wyData = await fetchWithDecoder(wySearchUrl);
+      
+      if (wyData?.result?.songs && wyData.result.songs.length > 0) {
+        const songId = wyData.result.songs[0].id;
+        const wyLyricUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`;
+        const wyLyricData = await fetchWithDecoder(wyLyricUrl);
         
-        if (aiLrc.includes('UNKNOWN') || aiLrc.trim() === '') {
-            console.log('AI does not know the lyrics. Skipping to avoid hallucination.')
-        } else {
-            lyricsData = parseLRC(aiLrc)
-            if (lyricsData.length > 0) {
-              source = '[AI Memory Source]'
-              console.log(`${source} AI recited lyrics successfully`)
-            }
+        if (wyLyricData?.lrc?.lyric) {
+          rawSyncedLyrics = wyLyricData.lrc.lyric;
+          source = '[NetEase Synced]';
+          console.log(`[NetEase] Found synced lyrics.`);
         }
-      } catch (e) {
-        console.error('AI Memory fallback failed:', e)
       }
     }
 
-    if (lyricsData.length === 0) {
-      throw new Error('Could not find or generate lyrics for this track.')
-    }
+    let lyricsData = [];
 
-    // 4. 尝试网易云获取翻译 (仅当有歌词时)
-    try {
-      const wyQuery = encodeURIComponent(`${cleanTitle} ${cleanArtist}`)
-      const wySearchUrl = `https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${wyQuery}&type=1&offset=0&total=true&limit=1`
-      const wyRes = await fetch(wySearchUrl)
-      const wyData = await wyRes.json()
+    // 4. 多语言过滤逻辑 & 容错处理 (AI 处理 API 返回的歌词)
+    if (rawSyncedLyrics || rawPlainLyrics) {
+      const lyricsToProcess = rawSyncedLyrics || rawPlainLyrics;
+      const isPlain = !rawSyncedLyrics;
+      console.log(`[AI Processing] Sending ${isPlain ? 'plain' : 'synced'} lyrics to AI for translation and filtering...`);
       
-      if (wyData.result && wyData.result.songs && wyData.result.songs.length > 0) {
-          const songId = wyData.result.songs[0].id
-          const wyLyricUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`
-          const wyLyricRes = await fetch(wyLyricUrl)
-          const wyLyricData = await wyLyricRes.json()
-          
-          if (wyLyricData.tlyric && wyLyricData.tlyric.lyric) {
-              const transLines = parseLRC(wyLyricData.tlyric.lyric)
-              transLines.forEach(t => {
-                  const match = lyricsData.find(l => Math.abs(l.time - t.time) < 1.0)
-                  if (match) match.translation = t.text
-              })
-              console.log('NetEase translation merged.')
-          }
-      }
-    } catch (wyErr) {
-      console.warn('NetEase translation fetch failed:', wyErr)
-    }
+      const aiPrompt = `你是一个专业的音乐翻译官。我会给你一段可能混杂了多国语言翻译的原始 ${isPlain ? '纯文本歌词 (plainLyrics)' : 'Lrc 文本 (syncedLyrics)'}：
+      
+${lyricsToProcess}
+      
+请执行以下操作：
+1. 识别并提取出【歌手实际演唱的原语言】（如日文或英文）。
+2. 丢弃文本中原有的其他外语翻译（如越南语、泰语等）。
+3. 为每一行原语言歌词重新生成【精准中文翻译】和【标准罗马音】。
+4. ${isPlain ? '由于原始歌词没有时间戳，请你根据歌曲一般节奏，估算并加上 [mm:ss.xx] 格式的时间戳。' : '严格保持原始时间戳 [mm:ss.xx] 不变。'}
+5. 必须输出一个合法的 JSON 数组，格式如下：
+[{"time": 12.5, "text": "原语言歌词", "romaji": "罗马音", "translation": "中文翻译"}]
+注意：time 是秒数（如 01:12.50 就是 72.5）。不要输出任何其他解释！`;
 
-    // 5. 大模型补全 (读音/翻译)
-    const needsTranslation = lyricsData.some(l => !l.translation)
-    const sampleText = lyricsData.map(l => l.text).join(' ')
-    const mightNeedRomaji = /[ぁ-んァ-ン一-龯가-힣]/.test(sampleText)
-
-    if (needsTranslation || mightNeedRomaji) {
-      console.log('Calling AI for translation/romaji completion...')
-      const enrichPrompt = `
-      You are a lyrics processing assistant. I will provide a JSON array of lyrics.
-      For each object in the array:
-      1. Keep "time" and "text" exactly as they are.
-      2. If "text" is in a foreign language (like Japanese, Korean, etc.), add a "romaji" key with the Romaji/Pinyin pronunciation. If it's English or Chinese, you can leave "romaji" empty or provide Pinyin for Chinese.
-      3. If "translation" is missing, add a "translation" key with the Chinese translation. If it already exists, keep it.
-      
-      Return ONLY a valid JSON array matching this schema:
-      [{ "time": 12.5, "text": "...", "romaji": "...", "translation": "..." }]
-      
-      Input JSON:
-      ${JSON.stringify(lyricsData)}
-      `
       try {
-        let enrichRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a helpful assistant that outputs ONLY valid JSON arrays.', enrichPrompt)
-        if (enrichRes) {
-          enrichRes = extractCleanContent(enrichRes)
-          const enrichedLyrics = JSON.parse(enrichRes)
-          
-          if (Array.isArray(enrichedLyrics) && enrichedLyrics.length > 0) {
-            enrichedLyrics.forEach(e => {
-                const match = lyricsData.find(l => l.time === e.time)
-                if (match) {
-                    if (e.romaji) match.romaji = e.romaji
-                    if (e.translation) match.translation = e.translation
-                }
-            })
-            console.log('AI completion merged.')
-          }
+        let aiRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a professional music translator. Output ONLY valid JSON array.', aiPrompt);
+        aiRes = extractCleanContent(aiRes);
+        lyricsData = JSON.parse(aiRes);
+        console.log(`[AI Processing] Successfully processed lyrics.`);
+      } catch (e) {
+        console.error(`[AI Processing Failed]`, e);
+        if (rawSyncedLyrics) {
+          lyricsData = parseLRC(rawSyncedLyrics);
+          console.log(`[Fallback] Used raw synced lyrics due to AI failure.`);
+        }
+      }
+    } 
+    // 5. 严禁瞎编 (AI Memory Fallback)
+    else {
+      console.log(`All APIs failed for: ${searchQuery}`);
+      
+      const recitePrompt = `你现在是一个严谨的音乐数据库。请根据歌名 "${cleanedTitle}" 和歌手 "${cleanedArtist}"，输出该歌曲的完整歌词数据。
+      
+⚠️ 警告：如果你不知道这首歌的真实歌词，请只回复 ERROR_NOT_FOUND，严禁自我创作。
+
+如果确信知道，请输出一个合法的 JSON 数组，包含时间戳（秒）、原歌词、罗马音、中文翻译：
+[{"time": 12.5, "text": "原语言歌词", "romaji": "罗马音", "translation": "中文翻译"}]
+不要有任何开场白。`;
+
+      try {
+        let aiLrc = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a strict music database. Never hallucinate.', recitePrompt);
+        aiLrc = extractCleanContent(aiLrc);
+        
+        if (aiLrc.includes('ERROR_NOT_FOUND') || aiLrc.trim() === '') {
+          console.log('AI does not know the lyrics. Skipping to avoid hallucination.');
+        } else {
+          lyricsData = JSON.parse(aiLrc);
+          source = '[AI Memory Source]';
+          console.log(`${source} AI recited lyrics successfully`);
         }
       } catch (e) {
-        console.error('AI completion failed:', e)
+        console.error('AI Memory fallback failed:', e);
       }
+    }
+
+    if (!lyricsData || lyricsData.length === 0) {
+      throw new Error('Could not find or generate lyrics for this track.');
     }
 
     return new Response(
-      JSON.stringify({ lyricsData, source, cleanTitle, cleanArtist }),
+      JSON.stringify({ lyricsData, source, cleanTitle: cleanedTitle, cleanArtist: cleanedArtist }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
