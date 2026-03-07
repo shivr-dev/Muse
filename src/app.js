@@ -1,5 +1,4 @@
 import { supabase } from './supabase-config.js';
-import { GoogleGenAI, Type } from "@google/genai";
 
 // 状态管理
 let tracks = [];
@@ -81,7 +80,12 @@ function renderTrackList() {
         
         // 判断是否已同步
         const syncStatusHtml = track.is_synced 
-            ? `<span class="status-synced"><i data-lucide="check-circle"></i> 已就绪</span>`
+            ? `<div style="display: flex; gap: 8px; align-items: center;">
+                 <button class="btn-fetch-lyrics" data-id="${track.id}" data-index="${index}" style="display: flex; align-items: center; gap: 4px; background: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                   <i data-lucide="mic-2" style="width: 14px; height: 14px;"></i> <span>更新歌词</span>
+                 </button>
+                 <span class="status-synced"><i data-lucide="check-circle"></i> 已就绪</span>
+               </div>`
             : `<div style="display: flex; gap: 8px;">
                  <button class="btn-copy" data-id="${track.id}" data-index="${index}" style="display: flex; align-items: center; gap: 4px; background: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
                    <i data-lucide="link" style="width: 14px; height: 14px;"></i> 复制链接
@@ -153,6 +157,26 @@ function renderTrackList() {
                         lucide.createIcons();
                     }
                 }, 2000);
+            });
+        }
+
+        // 绑定获取歌词按钮事件
+        const fetchLyricsBtn = item.querySelector('.btn-fetch-lyrics');
+        if (fetchLyricsBtn) {
+            fetchLyricsBtn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const btnSpan = fetchLyricsBtn.querySelector('span');
+                const originalText = btnSpan.textContent;
+                fetchLyricsBtn.disabled = true;
+                btnSpan.textContent = '获取中...';
+                fetchLyricsBtn.innerHTML = `<i data-lucide="loader" class="spin" style="width: 14px; height: 14px;"></i> <span>获取中...</span>`;
+                lucide.createIcons();
+                
+                await fetchLyrics(track.id, track.title, track.artist, index);
+                
+                fetchLyricsBtn.innerHTML = `<i data-lucide="mic-2" style="width: 14px; height: 14px;"></i> <span>更新歌词</span>`;
+                fetchLyricsBtn.disabled = false;
+                lucide.createIcons();
             });
         }
 
@@ -354,11 +378,6 @@ async function loadTrack(index) {
 
     // 渲染歌词
     renderLyrics();
-
-    // 如果没有歌词，尝试自动获取
-    if (!track.lyrics || track.lyrics.length === 0) {
-        fetchLyrics(track.id, track.title, track.artist, index);
-    }
 }
 
 // 播放指定歌曲
@@ -641,6 +660,23 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+function showToast(message) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'toast';
+    toast.innerHTML = message;
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+
 // 模式切换逻辑
 function switchMode(mode) {
     const app = document.getElementById('app');
@@ -732,50 +768,18 @@ async function fetchLyrics(trackId, title, artist, index) {
 
         if (needsTranslation || mightNeedRomaji) {
             try {
-                console.log('调用大模型补全歌词...');
-                // 确保 process.env.GEMINI_API_KEY 可用，如果不可用尝试 import.meta.env
-                const apiKey = (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) 
-                               || (import.meta && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY);
+                console.log('调用 Supabase Edge Function (Cloudflare AI) 补全歌词...');
+                showToast(`<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> 正在智能解析《${title}》的歌词...`);
+                lucide.createIcons();
                 
-                if (apiKey) {
-                    const ai = new GoogleGenAI({ apiKey: apiKey });
-                    
-                    const prompt = `
-                    You are a lyrics processing assistant. I will provide a JSON array of lyrics.
-                    For each object in the array:
-                    1. Keep "time" and "text" exactly as they are.
-                    2. If "text" is in a foreign language (like Japanese, Korean, etc.), add a "romaji" key with the Romaji/Pinyin pronunciation. If it's English or Chinese, you can leave "romaji" empty or provide Pinyin for Chinese.
-                    3. If "translation" is missing, add a "translation" key with the Chinese translation. If it already exists, keep it.
-                    
-                    Return ONLY a valid JSON array matching this schema:
-                    [{ "time": 12.5, "text": "...", "romaji": "...", "translation": "..." }]
-                    
-                    Input JSON:
-                    ${JSON.stringify(lyricsData)}
-                    `;
-                    
-                    const response = await ai.models.generateContent({
-                        model: "gemini-3.1-flash-preview",
-                        contents: prompt,
-                        config: {
-                            responseMimeType: "application/json",
-                            responseSchema: {
-                                type: Type.ARRAY,
-                                items: {
-                                    type: Type.OBJECT,
-                                    properties: {
-                                        time: { type: Type.NUMBER },
-                                        text: { type: Type.STRING },
-                                        romaji: { type: Type.STRING },
-                                        translation: { type: Type.STRING }
-                                    },
-                                    required: ["time", "text"]
-                                }
-                            }
-                        }
-                    });
-                    
-                    const enrichedLyrics = JSON.parse(response.text);
+                const { data, error } = await supabase.functions.invoke('process-lyrics', {
+                    body: { lyricsData }
+                });
+
+                if (error) throw error;
+
+                if (data && data.enrichedLyrics) {
+                    const enrichedLyrics = data.enrichedLyrics;
                     if (Array.isArray(enrichedLyrics) && enrichedLyrics.length > 0) {
                         // 合并回原数组
                         enrichedLyrics.forEach(e => {
@@ -786,11 +790,11 @@ async function fetchLyrics(trackId, title, artist, index) {
                             }
                         });
                     }
-                } else {
-                    console.warn('未找到 GEMINI_API_KEY，跳过大模型补全');
+                    showToast(`<i data-lucide="check-circle" style="width: 16px; height: 16px; color: #1DB954;"></i> 《${title}》歌词解析完成！`);
+                    lucide.createIcons();
                 }
             } catch (llmErr) {
-                console.error('大模型补全失败:', llmErr);
+                console.error('大模型补全失败，已回退到仅网易云翻译:', llmErr);
             }
         }
 
