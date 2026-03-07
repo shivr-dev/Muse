@@ -8,7 +8,7 @@ const corsHeaders = {
 // 辅助函数：调用 Cloudflare AI
 async function callCloudflareAI(accountId, apiToken, systemPrompt, userPrompt) {
   const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/qwen/qwen1.5-7b-chat-awq`,
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/qwen/qwen3-30b-a3b-fp8`,
     {
       method: 'POST',
       headers: {
