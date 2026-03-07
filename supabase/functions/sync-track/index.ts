@@ -50,96 +50,88 @@ serve(async (req) => {
       const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`Found YouTube Video: ${youtubeUrl}`);
 
-      // 1.2 尝试第三方解析接口链 (替代 Cobalt)
-      console.log(`Requesting third-party APIs for audio extraction...`);
+      // 1.2 尝试开源社区解析接口链 (Piped & Invidious)
+      console.log(`Requesting open-source APIs for audio extraction...`);
       
+      const PIPED_INSTANCES = [
+        'https://pipedapi.kavin.rocks',
+        'https://pipedapi.tokhmi.xyz',
+        'https://api.piped.projectsegfau.lt'
+      ];
+
+      const INVIDIOUS_INSTANCES = [
+        'https://invidious.nerdvpn.de',
+        'https://inv.tux.pizza',
+        'https://invidious.perennialte.ch'
+      ];
+
       const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
 
-      // 方法 1: ytdl.sh
+      // 方法 1: Piped API 轮询
       if (!targetAudioUrl) {
-        try {
-          console.log(`Trying ytdl.sh...`);
-          const res = await fetch(`https://ytdl.sh/api/info?url=${encodeURIComponent(youtubeUrl)}`, {
-            headers: { 'User-Agent': userAgent }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            targetAudioUrl = data.download_url || data.url || data.audioUrl;
-            if (targetAudioUrl) console.log(`Success with ytdl.sh`);
-          }
-        } catch (err) {
-          console.warn(`ytdl.sh failed: ${err.message}`);
-        }
-      }
+        for (const node of PIPED_INSTANCES) {
+          try {
+            console.log(`Trying Piped node: ${node}`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
 
-      // 方法 2: vevioz
-      if (!targetAudioUrl) {
-        try {
-          console.log(`Trying vevioz...`);
-          const res = await fetch(`https://api.vevioz.com/@api/button/mp3/${videoId}`, {
-            headers: { 'User-Agent': userAgent }
-          });
-          if (res.ok) {
-            const data = await res.json();
-            targetAudioUrl = data.download_url || data.url;
-            if (targetAudioUrl) console.log(`Success with vevioz`);
-          }
-        } catch (err) {
-          console.warn(`vevioz failed: ${err.message}`);
-        }
-      }
+            const res = await fetch(`${node}/streams/${videoId}`, {
+              headers: { 'User-Agent': userAgent },
+              signal: controller.signal
+            });
+            clearTimeout(timeoutId);
 
-      // 方法 3: y2mate (模拟请求)
-      if (!targetAudioUrl) {
-        try {
-          console.log(`Trying y2mate fallback...`);
-          const analyzeRes = await fetch('https://www.y2mate.com/mates/analyzeV2/ajax', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-              'User-Agent': userAgent,
-              'Origin': 'https://www.y2mate.com',
-              'Referer': 'https://www.y2mate.com/en800'
-            },
-            body: `k_query=${encodeURIComponent(youtubeUrl)}&k_page=home&hl=en&q_auto=1`
-          });
-
-          if (analyzeRes.ok) {
-            const analyzeData = await analyzeRes.json();
-            let kToken = null;
-            let vid = analyzeData.vid;
-
-            if (analyzeData.links && analyzeData.links.mp3) {
-              // 获取最高质量的 mp3 token
-              const mp3Links = Object.values(analyzeData.links.mp3);
-              if (mp3Links.length > 0) {
-                kToken = mp3Links[0].k;
+            if (res.ok) {
+              const data = await res.json();
+              if (data.audioStreams && data.audioStreams.length > 0) {
+                // 优先选择 M4A 或最高比特率的音频流
+                const stream = data.audioStreams.find(s => s.format === 'M4A') || data.audioStreams[0];
+                targetAudioUrl = stream.url;
+                console.log(`Success with Piped node: ${node}`);
+                break;
               }
+            } else {
+              console.warn(`Piped node ${node} returned status: ${res.status}`);
             }
+          } catch (err) {
+            console.warn(`Piped node ${node} failed: ${err.message}`);
+          }
+        }
+      }
 
-            if (kToken && vid) {
-              const convertRes = await fetch('https://www.y2mate.com/mates/convertV2/index', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                  'User-Agent': userAgent,
-                  'Origin': 'https://www.y2mate.com',
-                  'Referer': 'https://www.y2mate.com/en800'
-                },
-                body: `vid=${encodeURIComponent(vid)}&k=${encodeURIComponent(kToken)}`
-              });
+      // 方法 2: Invidious API 轮询
+      if (!targetAudioUrl) {
+        for (const node of INVIDIOUS_INSTANCES) {
+          try {
+            console.log(`Trying Invidious node: ${node}`);
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
 
-              if (convertRes.ok) {
-                const convertData = await convertRes.json();
-                if (convertData.status === 'ok' && convertData.dlink) {
-                  targetAudioUrl = convertData.dlink;
-                  console.log(`Success with y2mate`);
+            const res = await fetch(`${node}/api/v1/videos/${videoId}`, {
+              headers: { 'User-Agent': userAgent },
+              signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            if (res.ok) {
+              const data = await res.json();
+              if (data.adaptiveFormats && data.adaptiveFormats.length > 0) {
+                // 过滤出纯音频流
+                const audioStreams = data.adaptiveFormats.filter(f => f.type && f.type.startsWith('audio/'));
+                if (audioStreams.length > 0) {
+                  // 优先选择 m4a/mp4 容器的音频
+                  const stream = audioStreams.find(s => s.type.includes('mp4') || s.type.includes('m4a')) || audioStreams[0];
+                  targetAudioUrl = stream.url;
+                  console.log(`Success with Invidious node: ${node}`);
+                  break;
                 }
               }
+            } else {
+              console.warn(`Invidious node ${node} returned status: ${res.status}`);
             }
+          } catch (err) {
+            console.warn(`Invidious node ${node} failed: ${err.message}`);
           }
-        } catch (err) {
-          console.warn(`y2mate failed: ${err.message}`);
         }
       }
 
