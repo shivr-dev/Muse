@@ -50,90 +50,50 @@ serve(async (req) => {
       const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`Found YouTube Video: ${youtubeUrl}`);
 
-      // 1.2 尝试开源社区解析接口链 (Piped & Invidious)
-      console.log(`Requesting open-source APIs for audio extraction...`);
+      // 1.2 尝试高兼容性第三方下载 API (自带 IP 池)
+      console.log(`Requesting third-party APIs for audio extraction...`);
       
-      const PIPED_INSTANCES = [
-        'https://pipedapi.kavin.rocks',
-        'https://pipedapi.tokhmi.xyz',
-        'https://api.piped.projectsegfau.lt'
-      ];
-
-      const INVIDIOUS_INSTANCES = [
-        'https://invidious.nerdvpn.de',
-        'https://inv.tux.pizza',
-        'https://invidious.perennialte.ch'
-      ];
-
       const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
 
-      // 方法 1: Piped API 轮询
+      // 方法 1: api.v-dl.com
       if (!targetAudioUrl) {
-        for (const node of PIPED_INSTANCES) {
-          try {
-            console.log(`Trying Piped node: ${node}`);
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
-
-            const res = await fetch(`${node}/streams/${videoId}`, {
-              headers: { 'User-Agent': userAgent },
-              signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-
-            if (res.ok) {
-              const data = await res.json();
-              if (data.audioStreams && data.audioStreams.length > 0) {
-                // 优先选择 M4A 或最高比特率的音频流
-                const stream = data.audioStreams.find(s => s.format === 'M4A') || data.audioStreams[0];
-                // 强制使用代理：如果有 proxyUrl 则使用，否则使用 url
-                targetAudioUrl = stream.proxyUrl || stream.url;
-                console.log(`Success with Piped node: ${node}`);
-                break;
-              }
-            } else {
-              console.warn(`Piped node ${node} returned status: ${res.status}`);
-            }
-          } catch (err) {
-            console.warn(`Piped node ${node} failed: ${err.message}`);
+        try {
+          console.log(`Trying api.v-dl.com...`);
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
+          const res = await fetch(`https://api.v-dl.com/api/info?url=${encodeURIComponent(youtubeUrl)}`, {
+            headers: { 'User-Agent': userAgent },
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            targetAudioUrl = data.download_url || data.url || data.audioUrl || (data.formats && data.formats.find(f => f.hasAudio)?.url);
+            if (targetAudioUrl) console.log(`Success with api.v-dl.com`);
           }
+        } catch (err) {
+          console.warn(`api.v-dl.com failed: ${err.message}`);
         }
       }
 
-      // 方法 2: Invidious API 轮询
+      // 方法 2: api.options.rip
       if (!targetAudioUrl) {
-        for (const node of INVIDIOUS_INSTANCES) {
-          try {
-            console.log(`Trying Invidious node: ${node}`);
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
-
-            const res = await fetch(`${node}/api/v1/videos/${videoId}`, {
-              headers: { 'User-Agent': userAgent },
-              signal: controller.signal
-            });
-            clearTimeout(timeoutId);
-
-            if (res.ok) {
-              const data = await res.json();
-              if (data.adaptiveFormats && data.adaptiveFormats.length > 0) {
-                // 过滤出纯音频流
-                const audioStreams = data.adaptiveFormats.filter(f => f.type && f.type.startsWith('audio/'));
-                if (audioStreams.length > 0) {
-                  // 优先选择 m4a/mp4 容器的音频
-                  const stream = audioStreams.find(s => s.type.includes('mp4') || s.type.includes('m4a')) || audioStreams[0];
-                  // 强制使用 Invidious 代理模式 (local=true)
-                  targetAudioUrl = `${node}/latest_version?id=${videoId}&itag=${stream.itag}&local=true`;
-                  console.log(`Success with Invidious node: ${node} (Proxy Mode)`);
-                  break;
-                }
-              }
-            } else {
-              console.warn(`Invidious node ${node} returned status: ${res.status}`);
-            }
-          } catch (err) {
-            console.warn(`Invidious node ${node} failed: ${err.message}`);
+        try {
+          console.log(`Trying api.options.rip...`);
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15000);
+          const res = await fetch(`https://api.options.rip/api/download?url=${encodeURIComponent(youtubeUrl)}`, {
+            headers: { 'User-Agent': userAgent },
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (res.ok) {
+            const data = await res.json();
+            targetAudioUrl = data.download_url || data.url || data.audioUrl;
+            if (targetAudioUrl) console.log(`Success with api.options.rip`);
           }
+        } catch (err) {
+          console.warn(`api.options.rip failed: ${err.message}`);
         }
       }
 
@@ -146,30 +106,58 @@ serve(async (req) => {
 
     console.log(`Fetching audio from: ${targetAudioUrl}`)
     
-    // 伪装请求头，防止被 YouTube 或代理节点拦截 (403 Forbidden)
-    const audioResponse = await fetch(targetAudioUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-        'Referer': 'https://piped.video/',
-        'Origin': 'https://piped.video'
+    let audioBuffer: ArrayBuffer | null = null;
+    let contentType = 'audio/mpeg';
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60秒下载超时
+
+      let audioResponse = await fetch(targetAudioUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+          'Referer': 'https://www.youtube.com/',
+          'Origin': 'https://www.youtube.com'
+        },
+        signal: controller.signal
+      });
+
+      // 如果直接下载失败 (403等)，尝试使用 allorigins 代理
+      if (!audioResponse.ok) {
+        console.warn(`Direct fetch failed with ${audioResponse.status}. Trying allorigins proxy...`);
+        audioResponse = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetAudioUrl)}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+          signal: controller.signal
+        });
       }
-    })
-    
-    if (!audioResponse.ok || !audioResponse.body) {
-      throw new Error(`Failed to fetch audio source: ${audioResponse.status} ${audioResponse.statusText}`)
+      
+      if (!audioResponse.ok) {
+        throw new Error(`Failed to fetch audio source: ${audioResponse.status} ${audioResponse.statusText}`)
+      }
+
+      contentType = audioResponse.headers.get('content-type') || 'audio/mpeg';
+      audioBuffer = await audioResponse.arrayBuffer();
+      clearTimeout(timeoutId);
+
+    } catch (err) {
+      throw new Error(`Audio download failed: ${err.message}`);
     }
 
-    // 2. 将 ReadableStream 直接上传到 Supabase Storage
+    if (!audioBuffer || audioBuffer.byteLength === 0) {
+      throw new Error('Downloaded audio buffer is empty');
+    }
+
+    // 2. 将 ArrayBuffer 上传到 Supabase Storage
     // 使用 UUID 作为文件名，避免中文字符导致 Supabase Storage 报错 (Invalid key)
     const fileId = crypto.randomUUID();
     const filePath = `${fileId}.mp3`
     
-    console.log(`Uploading to Storage: ${filePath}`)
+    console.log(`Uploading to Storage: ${filePath}, size: ${audioBuffer.byteLength} bytes`)
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('audio')
-      .upload(filePath, audioResponse.body, {
-        duplex: 'half', // Deno fetch body stream 需要设置 duplex: 'half'
-        contentType: 'audio/mpeg'
+      .upload(filePath, audioBuffer, {
+        contentType: contentType,
+        upsert: true
       })
 
     if (uploadError) throw uploadError
