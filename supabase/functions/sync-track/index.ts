@@ -86,7 +86,8 @@ serve(async (req) => {
               if (data.audioStreams && data.audioStreams.length > 0) {
                 // 优先选择 M4A 或最高比特率的音频流
                 const stream = data.audioStreams.find(s => s.format === 'M4A') || data.audioStreams[0];
-                targetAudioUrl = stream.url;
+                // 强制使用代理：如果有 proxyUrl 则使用，否则使用 url
+                targetAudioUrl = stream.proxyUrl || stream.url;
                 console.log(`Success with Piped node: ${node}`);
                 break;
               }
@@ -121,8 +122,9 @@ serve(async (req) => {
                 if (audioStreams.length > 0) {
                   // 优先选择 m4a/mp4 容器的音频
                   const stream = audioStreams.find(s => s.type.includes('mp4') || s.type.includes('m4a')) || audioStreams[0];
-                  targetAudioUrl = stream.url;
-                  console.log(`Success with Invidious node: ${node}`);
+                  // 强制使用 Invidious 代理模式 (local=true)
+                  targetAudioUrl = `${node}/latest_version?id=${videoId}&itag=${stream.itag}&local=true`;
+                  console.log(`Success with Invidious node: ${node} (Proxy Mode)`);
                   break;
                 }
               }
@@ -144,9 +146,17 @@ serve(async (req) => {
 
     console.log(`Fetching audio from: ${targetAudioUrl}`)
     
-    const audioResponse = await fetch(targetAudioUrl)
+    // 伪装请求头，防止被 YouTube 或代理节点拦截 (403 Forbidden)
+    const audioResponse = await fetch(targetAudioUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+        'Referer': 'https://piped.video/',
+        'Origin': 'https://piped.video'
+      }
+    })
+    
     if (!audioResponse.ok || !audioResponse.body) {
-      throw new Error('Failed to fetch audio source')
+      throw new Error(`Failed to fetch audio source: ${audioResponse.status} ${audioResponse.statusText}`)
     }
 
     // 2. 将 ReadableStream 直接上传到 Supabase Storage
