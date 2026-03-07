@@ -50,71 +50,103 @@ serve(async (req) => {
       const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`Found YouTube Video: ${youtubeUrl}`);
 
-      // 1.2 使用 Cobalt API (V11) 提取完整音频流，实现节点轮询
-      console.log(`Requesting Cobalt API for audio extraction...`);
+      // 1.2 尝试第三方解析接口链 (替代 Cobalt)
+      console.log(`Requesting third-party APIs for audio extraction...`);
       
-      const COBALT_NODES = [
-        'https://cobalt-api.meowing.de/',
-        'https://kityune.imput.net/',
-        'https://api.v7.cobalt.tools/',
-        'https://nachos.imput.net/'
-      ];
-      
-      // Cobalt API V11 配置
-      const cobaltPayload = {
-        url: youtubeUrl,
-        downloadMode: 'audio',
-        audioFormat: 'mp3'
-      };
+      const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
 
-      let cobaltData = null;
-
-      for (const node of COBALT_NODES) {
+      // 方法 1: ytdl.sh
+      if (!targetAudioUrl) {
         try {
-          console.log(`Trying Cobalt node: ${node}`);
-          
-          // 设置 15 秒超时
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 15000);
-
-          const cobaltRes = await fetch(node, {
-            method: 'POST',
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json',
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
-            },
-            body: JSON.stringify(cobaltPayload),
-            signal: controller.signal
+          console.log(`Trying ytdl.sh...`);
+          const res = await fetch(`https://ytdl.sh/api/info?url=${encodeURIComponent(youtubeUrl)}`, {
+            headers: { 'User-Agent': userAgent }
           });
-
-          clearTimeout(timeoutId);
-
-          if (!cobaltRes.ok) {
-            const errText = await cobaltRes.text();
-            console.warn(`Node ${node} failed with status ${cobaltRes.status}: ${errText}`);
-            continue; // 尝试下一个节点
+          if (res.ok) {
+            const data = await res.json();
+            targetAudioUrl = data.download_url || data.url || data.audioUrl;
+            if (targetAudioUrl) console.log(`Success with ytdl.sh`);
           }
-
-          const data = await cobaltRes.json();
-          if (data.status === 'error') {
-            console.warn(`Node ${node} returned error: ${data.text || '未知错误'}`);
-            continue; // 尝试下一个节点
-          }
-
-          cobaltData = data;
-          break; // 成功获取，跳出循环
         } catch (err) {
-          console.warn(`Node ${node} request failed or timed out: ${err.message}`);
-          continue; // 尝试下一个节点
+          console.warn(`ytdl.sh failed: ${err.message}`);
         }
       }
 
-      if (!cobaltData || !cobaltData.url) {
+      // 方法 2: vevioz
+      if (!targetAudioUrl) {
+        try {
+          console.log(`Trying vevioz...`);
+          const res = await fetch(`https://api.vevioz.com/@api/button/mp3/${videoId}`, {
+            headers: { 'User-Agent': userAgent }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            targetAudioUrl = data.download_url || data.url;
+            if (targetAudioUrl) console.log(`Success with vevioz`);
+          }
+        } catch (err) {
+          console.warn(`vevioz failed: ${err.message}`);
+        }
+      }
+
+      // 方法 3: y2mate (模拟请求)
+      if (!targetAudioUrl) {
+        try {
+          console.log(`Trying y2mate fallback...`);
+          const analyzeRes = await fetch('https://www.y2mate.com/mates/analyzeV2/ajax', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+              'User-Agent': userAgent,
+              'Origin': 'https://www.y2mate.com',
+              'Referer': 'https://www.y2mate.com/en800'
+            },
+            body: `k_query=${encodeURIComponent(youtubeUrl)}&k_page=home&hl=en&q_auto=1`
+          });
+
+          if (analyzeRes.ok) {
+            const analyzeData = await analyzeRes.json();
+            let kToken = null;
+            let vid = analyzeData.vid;
+
+            if (analyzeData.links && analyzeData.links.mp3) {
+              // 获取最高质量的 mp3 token
+              const mp3Links = Object.values(analyzeData.links.mp3);
+              if (mp3Links.length > 0) {
+                kToken = mp3Links[0].k;
+              }
+            }
+
+            if (kToken && vid) {
+              const convertRes = await fetch('https://www.y2mate.com/mates/convertV2/index', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                  'User-Agent': userAgent,
+                  'Origin': 'https://www.y2mate.com',
+                  'Referer': 'https://www.y2mate.com/en800'
+                },
+                body: `vid=${encodeURIComponent(vid)}&k=${encodeURIComponent(kToken)}`
+              });
+
+              if (convertRes.ok) {
+                const convertData = await convertRes.json();
+                if (convertData.status === 'ok' && convertData.dlink) {
+                  targetAudioUrl = convertData.dlink;
+                  console.log(`Success with y2mate`);
+                }
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(`y2mate failed: ${err.message}`);
+        }
+      }
+
+      if (!targetAudioUrl) {
         throw new Error('所有音频解析节点均不可用');
       }
       
-      targetAudioUrl = cobaltData.url;
       console.log(`Successfully extracted audio URL: ${targetAudioUrl}`);
     }
 
