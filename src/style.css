@@ -69,6 +69,7 @@ button:hover {
     grid-template-columns: 240px 1fr;
     grid-template-rows: 1fr 90px;
     height: 100vh;
+    height: 100dvh;
 }
 
 #bg-blur {
@@ -358,7 +359,7 @@ header h2 {
 #app.mode-full {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100dvh;
     position: relative;
 }
 
@@ -386,7 +387,7 @@ header h2 {
     bottom: 0;
     left: 0;
     width: 100%;
-    height: 100vh;
+    height: 100dvh;
     background: transparent;
     border: none;
     flex-direction: column;
@@ -559,7 +560,7 @@ header h2 {
 #app.mode-lyrics {
     display: flex;
     flex-direction: column;
-    height: 100vh;
+    height: 100dvh;
     position: relative;
 }
 
@@ -598,12 +599,42 @@ header h2 {
     top: 0;
     left: 0;
     width: 100%;
-    height: calc(100vh - 120px);
+    height: calc(100dvh - 120px);
     z-index: 1;
     display: flex;
     align-items: center;
     justify-content: center;
     overflow: hidden;
+}
+
+.lyrics-controls {
+    position: absolute;
+    top: 40px;
+    right: 40px;
+    display: flex;
+    gap: 12px;
+    z-index: 10;
+}
+
+.lyric-mode-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    padding: 8px 16px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(10px);
+    transition: all 0.2s;
+}
+
+.lyric-mode-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+.lyric-mode-btn.active {
+    background: var(--accent-color);
+    color: #000;
+    font-weight: 600;
 }
 
 .lyrics-container {
@@ -654,8 +685,20 @@ header h2 {
     color: rgba(255, 255, 255, 0.3);
 }
 
+.lyric-romaji {
+    font-size: 16px;
+    font-weight: 400;
+    margin-top: 4px;
+    color: rgba(255, 255, 255, 0.4);
+    font-style: italic;
+}
+
 .lyric-line.active .lyric-translation {
     color: rgba(255, 255, 255, 0.7);
+}
+
+.lyric-line.active .lyric-romaji {
+    color: rgba(255, 255, 255, 0.8);
 }
 
 .lyrics-placeholder {
@@ -672,6 +715,8 @@ header h2 {
     #app.mode-standard {
         display: flex;
         flex-direction: column;
+        height: 100vh;
+        height: 100dvh;
     }
     
     #sidebar {
@@ -704,6 +749,7 @@ header h2 {
         flex: 1;
         padding: 16px;
         overflow-y: auto;
+        min-height: 0;
     }
     
     header {
@@ -722,7 +768,9 @@ header h2 {
         flex-direction: column;
         height: auto;
         padding: 12px;
+        padding-bottom: env(safe-area-inset-bottom, 12px);
         gap: 12px;
+        flex-shrink: 0;
     }
     
     .now-playing {
@@ -757,6 +805,17 @@ header h2 {
         left: 20px;
     }
     
+    .lyrics-controls {
+        top: 20px;
+        right: 20px;
+        gap: 8px;
+    }
+    
+    .lyric-mode-btn {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+    
     .lyric-line {
         font-size: 20px;
     }
@@ -767,5 +826,9 @@ header h2 {
     
     .lyric-translation {
         font-size: 14px;
+    }
+    
+    .lyric-romaji {
+        font-size: 12px;
     }
 }

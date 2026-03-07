@@ -1,10 +1,12 @@
 import { supabase } from './supabase-config.js';
+import { GoogleGenAI, Type } from "@google/genai";
 
 // 状态管理
 let tracks = [];
 let currentTrackIndex = -1;
 let isPlaying = false;
-let currentMode = 'standard'; // 'standard', 'full', 'mini'
+let currentMode = 'standard'; // 'standard', 'full', 'mini', 'lyrics'
+let currentLyricMode = 'original'; // 'original', 'bilingual', 'learning', 'all'
 
 // DOM 元素
 const audio = new Audio();
@@ -352,6 +354,11 @@ async function loadTrack(index) {
 
     // 渲染歌词
     renderLyrics();
+
+    // 如果没有歌词，尝试自动获取
+    if (!track.lyrics || track.lyrics.length === 0) {
+        fetchLyrics(track.id, track.title, track.artist, index);
+    }
 }
 
 // 播放指定歌曲
@@ -475,6 +482,17 @@ function setupEventListeners() {
     
     // 退出模式按钮
     document.getElementById('btn-exit-mode').addEventListener('click', () => switchMode('standard'));
+    
+    // 歌词显示模式切换
+    document.querySelectorAll('.lyric-mode-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.lyric-mode-btn').forEach(b => b.classList.remove('active'));
+            e.target.classList.add('active');
+            currentLyricMode = e.target.getAttribute('data-lmode');
+            renderLyrics();
+            syncLyrics(audio.currentTime, true);
+        });
+    });
     
     // 画中画悬浮窗
     pipBtn.addEventListener('click', togglePiP);
@@ -660,69 +678,140 @@ function switchMode(mode) {
 // 歌词功能
 // =========================================
 
-// 自动获取歌词与翻译
+// 自动获取歌词与翻译 (三级跳补偿机制)
 async function fetchLyrics(trackId, title, artist, index) {
     try {
         console.log('开始获取歌词:', title, artist);
+        let lyricsData = [];
+
+        // 第一步：LRCLIB 获取原文
         const query = encodeURIComponent(`${title} ${artist}`);
         const res = await fetch(`https://lrclib.net/api/search?q=${query}`);
         const data = await res.json();
         
-        if (data && data.length > 0) {
-            const bestMatch = data[0];
-            const syncedLyrics = bestMatch.syncedLyrics;
-            const plainLyrics = bestMatch.plainLyrics;
+        if (data && data.length > 0 && data[0].syncedLyrics) {
+            lyricsData = parseLRC(data[0].syncedLyrics);
+        }
+
+        if (lyricsData.length === 0) {
+            console.log('未找到歌词，跳过');
+            return;
+        }
+
+        // 第二步：网易云获取翻译
+        try {
+            const wyQuery = encodeURIComponent(`${title} ${artist}`);
+            const wySearchUrl = `https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${wyQuery}&type=1&offset=0&total=true&limit=1`;
+            const wyRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(wySearchUrl)}`);
+            const wyData = await wyRes.json();
             
-            if (syncedLyrics) {
-                const lyricsJson = parseLRC(syncedLyrics);
-                let translation = null;
+            if (wyData.result && wyData.result.songs && wyData.result.songs.length > 0) {
+                const songId = wyData.result.songs[0].id;
+                const wyLyricUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`;
+                const wyLyricRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(wyLyricUrl)}`);
+                const wyLyricData = await wyLyricRes.json();
                 
-                // 尝试获取网易云翻译
-                try {
-                    const wyQuery = encodeURIComponent(`${title} ${artist}`);
-                    const wySearchUrl = `https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${wyQuery}&type=1&offset=0&total=true&limit=1`;
-                    const wyRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(wySearchUrl)}`);
-                    const wyData = await wyRes.json();
-                    
-                    if (wyData.result && wyData.result.songs && wyData.result.songs.length > 0) {
-                        const songId = wyData.result.songs[0].id;
-                        const wyLyricUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`;
-                        const wyLyricRes = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(wyLyricUrl)}`);
-                        const wyLyricData = await wyLyricRes.json();
-                        
-                        if (wyLyricData.tlyric && wyLyricData.tlyric.lyric) {
-                            translation = wyLyricData.tlyric.lyric;
-                        }
-                    }
-                } catch (wyErr) {
-                    console.error('获取网易云翻译失败:', wyErr);
-                }
-                
-                // 更新数据库
-                const { error } = await supabase
-                    .from('tracks')
-                    .update({ 
-                        lyrics: lyricsJson,
-                        lyrics_translation: translation
-                    })
-                    .eq('id', trackId);
-                    
-                if (error) throw error;
-                
-                // 更新本地状态
-                tracks[index].lyrics = lyricsJson;
-                tracks[index].lyrics_translation = translation;
-                
-                console.log('歌词获取成功并已保存');
-                
-                // 如果当前正在播放这首歌，刷新歌词显示
-                if (currentTrackIndex === index) {
-                    renderLyrics();
+                if (wyLyricData.tlyric && wyLyricData.tlyric.lyric) {
+                    const transLines = parseLRC(wyLyricData.tlyric.lyric);
+                    // 匹配时间戳合并翻译
+                    transLines.forEach(t => {
+                        const match = lyricsData.find(l => Math.abs(l.time - t.time) < 1.0);
+                        if (match) match.translation = t.text;
+                    });
                 }
             }
+        } catch (wyErr) {
+            console.error('获取网易云翻译失败:', wyErr);
+        }
+
+        // 第三步：大模型补全 (读音/翻译)
+        const needsTranslation = lyricsData.some(l => !l.translation);
+        // 简单判断是否可能需要罗马音 (非纯中文/英文)
+        const sampleText = lyricsData.map(l => l.text).join(' ');
+        const mightNeedRomaji = /[ぁ-んァ-ン一-龯가-힣]/.test(sampleText);
+
+        if (needsTranslation || mightNeedRomaji) {
+            try {
+                console.log('调用大模型补全歌词...');
+                // 确保 process.env.GEMINI_API_KEY 可用，如果不可用尝试 import.meta.env
+                const apiKey = (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) 
+                               || (import.meta && import.meta.env && import.meta.env.VITE_GEMINI_API_KEY);
+                
+                if (apiKey) {
+                    const ai = new GoogleGenAI({ apiKey: apiKey });
+                    
+                    const prompt = `
+                    You are a lyrics processing assistant. I will provide a JSON array of lyrics.
+                    For each object in the array:
+                    1. Keep "time" and "text" exactly as they are.
+                    2. If "text" is in a foreign language (like Japanese, Korean, etc.), add a "romaji" key with the Romaji/Pinyin pronunciation. If it's English or Chinese, you can leave "romaji" empty or provide Pinyin for Chinese.
+                    3. If "translation" is missing, add a "translation" key with the Chinese translation. If it already exists, keep it.
+                    
+                    Return ONLY a valid JSON array matching this schema:
+                    [{ "time": 12.5, "text": "...", "romaji": "...", "translation": "..." }]
+                    
+                    Input JSON:
+                    ${JSON.stringify(lyricsData)}
+                    `;
+                    
+                    const response = await ai.models.generateContent({
+                        model: "gemini-3.1-flash-preview",
+                        contents: prompt,
+                        config: {
+                            responseMimeType: "application/json",
+                            responseSchema: {
+                                type: Type.ARRAY,
+                                items: {
+                                    type: Type.OBJECT,
+                                    properties: {
+                                        time: { type: Type.NUMBER },
+                                        text: { type: Type.STRING },
+                                        romaji: { type: Type.STRING },
+                                        translation: { type: Type.STRING }
+                                    },
+                                    required: ["time", "text"]
+                                }
+                            }
+                        }
+                    });
+                    
+                    const enrichedLyrics = JSON.parse(response.text);
+                    if (Array.isArray(enrichedLyrics) && enrichedLyrics.length > 0) {
+                        // 合并回原数组
+                        enrichedLyrics.forEach(e => {
+                            const match = lyricsData.find(l => l.time === e.time);
+                            if (match) {
+                                if (e.romaji) match.romaji = e.romaji;
+                                if (e.translation) match.translation = e.translation;
+                            }
+                        });
+                    }
+                } else {
+                    console.warn('未找到 GEMINI_API_KEY，跳过大模型补全');
+                }
+            } catch (llmErr) {
+                console.error('大模型补全失败:', llmErr);
+            }
+        }
+
+        // 更新数据库
+        const { error } = await supabase
+            .from('tracks')
+            .update({ lyrics: lyricsData })
+            .eq('id', trackId);
+            
+        if (error) throw error;
+        
+        // 更新本地状态
+        tracks[index].lyrics = lyricsData;
+        console.log('歌词获取并处理成功');
+        
+        // 如果当前正在播放这首歌，刷新歌词显示
+        if (currentTrackIndex === index) {
+            renderLyrics();
         }
     } catch (err) {
-        console.error('获取歌词失败:', err);
+        console.error('获取歌词流程异常:', err);
     }
 }
 
@@ -761,25 +850,16 @@ function renderLyrics() {
         return;
     }
     
-    // 解析翻译 (如果有)
-    let transMap = {};
-    if (track.lyrics_translation) {
-        const transLines = parseLRC(track.lyrics_translation);
-        transLines.forEach(t => {
-            // 匹配时间戳，允许一定误差
-            const key = Math.floor(t.time);
-            transMap[key] = t.text;
-        });
-    }
-    
     let html = '';
     track.lyrics.forEach((line, i) => {
-        const key = Math.floor(line.time);
-        const transText = transMap[key] || '';
+        const showRomaji = (currentLyricMode === 'learning' || currentLyricMode === 'all') && line.romaji;
+        const showTrans = (currentLyricMode === 'bilingual' || currentLyricMode === 'all') && line.translation;
+        
         html += `
             <div class="lyric-line" id="lyric-${i}" data-time="${line.time}">
                 <div class="lyric-text">${line.text}</div>
-                ${transText ? `<div class="lyric-translation">${transText}</div>` : ''}
+                ${showRomaji ? `<div class="lyric-romaji">${line.romaji}</div>` : ''}
+                ${showTrans ? `<div class="lyric-translation">${line.translation}</div>` : ''}
             </div>
         `;
     });
