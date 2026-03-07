@@ -5,14 +5,16 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// 辅助函数：提取 JSON 或 LRC，过滤掉 <think> 标签
+// --- 核心配置 ---
+let CF_ACCOUNT_ID = "";
+let CF_API_TOKEN = "";
+
+// 辅助函数：提取 JSON，过滤掉 <think> 标签
 function extractCleanContent(text) {
   if (!text) return '';
   let cleanText = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  
   const jsonMatch = cleanText.match(/```(?:json)?\n([\s\S]*?)\n```/);
   if (jsonMatch) return jsonMatch[1].trim();
-  
   const startArr = cleanText.indexOf('[');
   const endArr = cleanText.lastIndexOf(']');
   if (startArr !== -1 && endArr !== -1 && endArr > startArr) {
@@ -24,72 +26,6 @@ function extractCleanContent(text) {
   return cleanText;
 }
 
-// 辅助函数：调用 Cloudflare AI
-async function callCloudflareAI(accountId, apiToken, systemPrompt, userPrompt) {
-  const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/@cf/qwen/qwen3-30b-a3b-fp8`,
-    {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ]
-      })
-    }
-  )
-  const result = await response.json()
-  if (!result.success) {
-    console.error('Cloudflare AI Error:', result.errors)
-    throw new Error('Cloudflare AI request failed')
-  }
-  
-  let responseText = result.result?.response || result.result;
-  if (typeof responseText !== 'string') {
-      try {
-          responseText = JSON.stringify(responseText);
-      } catch (e) {
-          responseText = String(responseText);
-      }
-  }
-  return responseText || '';
-}
-
-// 辅助函数：解析 LRC (Fallback)
-function parseLRC(lrc) {
-  if (!lrc) return [];
-  const lines = lrc.split('\n');
-  const result = [];
-  const timeReg = /\[(\d{2}):(\d{2})\.(\d{2,3})\]/;
-  for (const line of lines) {
-      const match = timeReg.exec(line);
-      if (match) {
-          const min = parseInt(match[1]);
-          const sec = parseInt(match[2]);
-          const ms = parseInt(match[3].padEnd(3, '0'));
-          const time = min * 60 + sec + ms / 1000;
-          const text = line.replace(timeReg, '').trim();
-          if (text) {
-              result.push({ time, text });
-          }
-      }
-  }
-  return result;
-}
-
-// 辅助函数：清洗歌名和歌手
-function cleanString(str) {
-  if (!str) return '';
-  return str.replace(/\.(mp3|flac|wav|m4a)$/i, '')
-            .replace(/[\(\[\{](live|mv|official|lyric|audio|video|official video)[\)\]\}]/gi, '')
-            .replace(/[-_]/g, ' ')
-            .trim();
-}
-
 // 辅助函数：带 TextDecoder 的 Fetch，解决乱码
 async function fetchWithDecoder(url) {
   console.log(`[API Request] ${url}`);
@@ -99,10 +35,7 @@ async function fetchWithDecoder(url) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       }
     });
-    if (!res.ok) {
-      console.warn(`[API Request Failed] Status: ${res.status}`);
-      return null;
-    }
+    if (!res.ok) return null;
     const arrayBuffer = await res.arrayBuffer();
     const decoder = new TextDecoder("utf-8");
     const text = decoder.decode(arrayBuffer);
@@ -113,6 +46,135 @@ async function fetchWithDecoder(url) {
   }
 }
 
+/**
+ * 通用 Cloudflare Fetch 函数 (Qwen 3)
+ */
+async function fetchCF(prompt) {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/@cf/qwen/qwen3-30b-a3b-fp8`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${CF_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: prompt }]
+      }),
+    }
+  );
+
+  const result = await response.json();
+  if (!result.success) throw new Error('Cloudflare AI request failed');
+  
+  const content = result.result?.response || result.result;
+  return typeof content === 'string' ? content : JSON.stringify(content);
+}
+
+/**
+ * 智子缝合：把三段歌词合并成标准的 JSON 数组
+ */
+async function callQwen3ToMerge(raw, trans, roma, title) {
+  const prompt = `你是一个专业的音乐歌词编辑。我会给你歌曲《${title}》的三段歌词数据（原文、中文翻译、罗马音）。
+请你按时间戳将它们完美缝合，并输出一个合法的 JSON 数组。
+
+规则：
+1. 必须输出 JSON 数组，格式如下：
+[{"time": 12.5, "text": "原语言歌词", "romaji": "罗马音", "translation": "中文翻译"}]
+2. time 是秒数（如 01:12.50 就是 72.5）。
+3. 如果某部分（翻译或罗马音）缺失，则对应字段留空字符串 ""。
+4. 纠正可能的乱码，保持原文语种。
+5. 丢弃文本中原有的其他外语翻译（如越南语、泰语等）。
+6. 不要输出任何解释，只输出 JSON 数组！
+
+数据如下：
+原文：
+${raw.substring(0, 2000)}
+
+翻译：
+${trans ? trans.substring(0, 2000) : '无'}
+
+罗马音：
+${roma ? roma.substring(0, 2000) : '无'}`;
+
+  const res = await fetchCF(prompt);
+  return extractCleanContent(res);
+}
+
+/**
+ * 严谨兜底：当 API 彻底失效时使用
+ */
+async function callQwen3Fallback(title, artist) {
+  const prompt = `搜索并整理歌曲《${title}》（歌手：${artist}）的歌词。
+要求：
+1. 必须输出一个合法的 JSON 数组，格式如下：
+[{"time": 12.5, "text": "原语言歌词", "romaji": "罗马音", "translation": "中文翻译"}]
+2. time 是秒数（如 01:12.50 就是 72.5）。
+3. 如果你不知道这首歌的真实歌词，请只回复 "ERROR_NOT_FOUND"，严禁编造。
+4. 不要输出任何解释，只输出 JSON 数组！`;
+
+  const res = await fetchCF(prompt);
+  return extractCleanContent(res);
+}
+
+/**
+ * 核心逻辑：网易云优先抓取 + AI 智能缝合
+ */
+async function getEnhancedLyrics(title, artist) {
+  // 1. 清洗搜索词：去掉 .mp3, (Live), [MV] 等干扰项
+  const cleanTitle = title.replace(/\.(mp3|wav|flac|m4a)$/i, '').replace(/[\(\[\{](live|mv|official|lyric|audio|video|official video)[\)\]\}]/gi, '').replace(/[-_]/g, ' ').trim();
+  const cleanArtist = artist.replace(/\.(mp3|wav|flac|m4a)$/i, '').trim();
+  const searchQuery = `${cleanTitle} ${cleanArtist}`.trim();
+  console.log(`[Search] 正在搜索: ${searchQuery}`);
+
+  let source = '';
+  let lyricsData = null;
+
+  try {
+    // 2. 请求网易云搜索接口
+    const searchUrl = `https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${encodeURIComponent(searchQuery)}&type=1&offset=0&total=true&limit=3`;
+    const searchRes = await fetchWithDecoder(searchUrl);
+    const song = searchRes?.result?.songs?.[0];
+
+    if (song?.id) {
+      console.log(`[Netease] 命中歌曲 ID: ${song.id}`);
+      
+      // 3. 抓取完整歌词包 (原文 + 翻译 + 罗马音)
+      const lyricUrl = `https://music.163.com/api/song/lyric?id=${song.id}&lv=1&kv=1&tv=-1`;
+      const lyricRes = await fetchWithDecoder(lyricUrl);
+
+      const rawLrc = lyricRes?.lrc?.lyric || "";
+      const tLrc = lyricRes?.tlyric?.lyric || "";
+      const romaLrc = lyricRes?.romalyr?.lyric || "";
+
+      if (rawLrc) {
+        console.log(`[Netease] 获取到歌词，交给 AI 缝合...`);
+        // 4. 交给 Cloudflare AI (Qwen 3) 进行智能合并与格式化
+        const aiMerged = await callQwen3ToMerge(rawLrc, tLrc, romaLrc, cleanTitle);
+        lyricsData = JSON.parse(aiMerged);
+        source = '[Netease + AI Merged]';
+      }
+    }
+  } catch (err) {
+    console.error("[Error] 插件抓取失败，进入 AI 兜底模式", err);
+  }
+
+  // 5. 兜底：如果 API 啥也没搜到，才允许 AI 凭记忆生成（严格限制）
+  if (!lyricsData || lyricsData.length === 0) {
+    console.log(`[Fallback] API 无结果，尝试 AI 记忆兜底...`);
+    const fallbackRes = await callQwen3Fallback(cleanTitle, cleanArtist);
+    if (fallbackRes.includes('ERROR_NOT_FOUND') || fallbackRes.trim() === '') {
+      console.log('AI does not know the lyrics. Skipping to avoid hallucination.');
+      throw new Error('Could not find or generate lyrics for this track.');
+    } else {
+      lyricsData = JSON.parse(fallbackRes);
+      source = '[AI Memory Source]';
+    }
+  }
+
+  return { lyricsData, source, cleanTitle, cleanArtist };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -121,131 +183,17 @@ serve(async (req) => {
   try {
     const { title: rawTitle = '', artist: rawArtist = '' } = await req.json()
 
-    const CF_ACCOUNT_ID = Deno.env.get('CF_ACCOUNT_ID')
-    const CF_API_TOKEN = Deno.env.get('CF_API_TOKEN')
+    CF_ACCOUNT_ID = Deno.env.get('CF_ACCOUNT_ID') || '';
+    CF_API_TOKEN = Deno.env.get('CF_API_TOKEN') || '';
 
     if (!CF_ACCOUNT_ID || !CF_API_TOKEN) {
       throw new Error('Missing Cloudflare credentials in Supabase Secrets')
     }
 
-    console.log(`[Process Lyrics] Start processing for: ${rawTitle} - ${rawArtist}`)
-
-    // 1. 更聪明的清洗
-    const cleanedTitle = cleanString(rawTitle);
-    const cleanedArtist = cleanString(rawArtist);
-    const searchQuery = `${cleanedTitle} ${cleanedArtist}`.trim();
-    console.log(`[Cleaned Search Query] ${searchQuery}`);
-
-    let rawSyncedLyrics = null;
-    let rawPlainLyrics = null;
-    let source = '';
-
-    // 2. 优化 LRCLIB 调用
-    const lrclibUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(searchQuery)}`;
-    const lrclibData = await fetchWithDecoder(lrclibUrl);
-    
-    if (lrclibData && Array.isArray(lrclibData)) {
-      for (const item of lrclibData) {
-        if (item.syncedLyrics) {
-          rawSyncedLyrics = item.syncedLyrics;
-          source = '[LRCLIB Synced]';
-          console.log(`[LRCLIB] Found synced lyrics.`);
-          break;
-        } else if (item.plainLyrics && !rawPlainLyrics) {
-          rawPlainLyrics = item.plainLyrics;
-          source = '[LRCLIB Plain]';
-        }
-      }
-    }
-
-    // 3. 增加网易云兜底 (Netease)
-    if (!rawSyncedLyrics && !rawPlainLyrics) {
-      console.log(`[LRCLIB] No results. Trying NetEase...`);
-      const wyQuery = encodeURIComponent(searchQuery);
-      const wySearchUrl = `https://music.163.com/api/search/get/web?csrf_token=hlpretag=&hlposttag=&s=${wyQuery}&type=1&offset=0&total=true&limit=1`;
-      const wyData = await fetchWithDecoder(wySearchUrl);
-      
-      if (wyData?.result?.songs && wyData.result.songs.length > 0) {
-        const songId = wyData.result.songs[0].id;
-        const wyLyricUrl = `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`;
-        const wyLyricData = await fetchWithDecoder(wyLyricUrl);
-        
-        if (wyLyricData?.lrc?.lyric) {
-          rawSyncedLyrics = wyLyricData.lrc.lyric;
-          source = '[NetEase Synced]';
-          console.log(`[NetEase] Found synced lyrics.`);
-        }
-      }
-    }
-
-    let lyricsData = [];
-
-    // 4. 多语言过滤逻辑 & 容错处理 (AI 处理 API 返回的歌词)
-    if (rawSyncedLyrics || rawPlainLyrics) {
-      const lyricsToProcess = rawSyncedLyrics || rawPlainLyrics;
-      const isPlain = !rawSyncedLyrics;
-      console.log(`[AI Processing] Sending ${isPlain ? 'plain' : 'synced'} lyrics to AI for translation and filtering...`);
-      
-      const aiPrompt = `你是一个专业的音乐翻译官。我会给你一段可能混杂了多国语言翻译的原始 ${isPlain ? '纯文本歌词 (plainLyrics)' : 'Lrc 文本 (syncedLyrics)'}：
-      
-${lyricsToProcess}
-      
-请执行以下操作：
-1. 识别并提取出【歌手实际演唱的原语言】（如日文或英文）。
-2. 丢弃文本中原有的其他外语翻译（如越南语、泰语等）。
-3. 为每一行原语言歌词重新生成【精准中文翻译】和【标准罗马音】。
-4. ${isPlain ? '由于原始歌词没有时间戳，请你根据歌曲一般节奏，估算并加上 [mm:ss.xx] 格式的时间戳。' : '严格保持原始时间戳 [mm:ss.xx] 不变。'}
-5. 必须输出一个合法的 JSON 数组，格式如下：
-[{"time": 12.5, "text": "原语言歌词", "romaji": "罗马音", "translation": "中文翻译"}]
-注意：time 是秒数（如 01:12.50 就是 72.5）。不要输出任何其他解释！`;
-
-      try {
-        let aiRes = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a professional music translator. Output ONLY valid JSON array.', aiPrompt);
-        aiRes = extractCleanContent(aiRes);
-        lyricsData = JSON.parse(aiRes);
-        console.log(`[AI Processing] Successfully processed lyrics.`);
-      } catch (e) {
-        console.error(`[AI Processing Failed]`, e);
-        if (rawSyncedLyrics) {
-          lyricsData = parseLRC(rawSyncedLyrics);
-          console.log(`[Fallback] Used raw synced lyrics due to AI failure.`);
-        }
-      }
-    } 
-    // 5. 严禁瞎编 (AI Memory Fallback)
-    else {
-      console.log(`All APIs failed for: ${searchQuery}`);
-      
-      const recitePrompt = `你现在是一个严谨的音乐数据库。请根据歌名 "${cleanedTitle}" 和歌手 "${cleanedArtist}"，输出该歌曲的完整歌词数据。
-      
-⚠️ 警告：如果你不知道这首歌的真实歌词，请只回复 ERROR_NOT_FOUND，严禁自我创作。
-
-如果确信知道，请输出一个合法的 JSON 数组，包含时间戳（秒）、原歌词、罗马音、中文翻译：
-[{"time": 12.5, "text": "原语言歌词", "romaji": "罗马音", "translation": "中文翻译"}]
-不要有任何开场白。`;
-
-      try {
-        let aiLrc = await callCloudflareAI(CF_ACCOUNT_ID, CF_API_TOKEN, 'You are a strict music database. Never hallucinate.', recitePrompt);
-        aiLrc = extractCleanContent(aiLrc);
-        
-        if (aiLrc.includes('ERROR_NOT_FOUND') || aiLrc.trim() === '') {
-          console.log('AI does not know the lyrics. Skipping to avoid hallucination.');
-        } else {
-          lyricsData = JSON.parse(aiLrc);
-          source = '[AI Memory Source]';
-          console.log(`${source} AI recited lyrics successfully`);
-        }
-      } catch (e) {
-        console.error('AI Memory fallback failed:', e);
-      }
-    }
-
-    if (!lyricsData || lyricsData.length === 0) {
-      throw new Error('Could not find or generate lyrics for this track.');
-    }
+    const result = await getEnhancedLyrics(rawTitle, rawArtist);
 
     return new Response(
-      JSON.stringify({ lyricsData, source, cleanTitle: cleanedTitle, cleanArtist: cleanedArtist }),
+      JSON.stringify(result),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
