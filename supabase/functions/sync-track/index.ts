@@ -50,50 +50,63 @@ serve(async (req) => {
       const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
       console.log(`Found YouTube Video: ${youtubeUrl}`);
 
-      // 1.2 尝试高兼容性第三方下载 API (自带 IP 池)
-      console.log(`Requesting third-party APIs for audio extraction...`);
+      // 1.2 尝试长寿稳定的解析源 (Loader.to / ytdl-core-api)
+      console.log(`Requesting stable APIs for audio extraction...`);
       
       const userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36';
 
-      // 方法 1: api.v-dl.com
+      // 方法 1: Loader.to API
       if (!targetAudioUrl) {
         try {
-          console.log(`Trying api.v-dl.com...`);
+          console.log(`Trying Loader.to...`);
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 15000);
-          const res = await fetch(`https://api.v-dl.com/api/info?url=${encodeURIComponent(youtubeUrl)}`, {
+          const res = await fetch(`https://loader.to/api/json?url=${encodeURIComponent(youtubeUrl)}`, {
             headers: { 'User-Agent': userAgent },
             signal: controller.signal
           });
           clearTimeout(timeoutId);
           if (res.ok) {
             const data = await res.json();
-            targetAudioUrl = data.download_url || data.url || data.audioUrl || (data.formats && data.formats.find(f => f.hasAudio)?.url);
-            if (targetAudioUrl) console.log(`Success with api.v-dl.com`);
+            targetAudioUrl = data.download_url || data.url;
+            if (targetAudioUrl) console.log(`Success with Loader.to`);
+          } else {
+            console.warn(`Loader.to returned status: ${res.status}`);
           }
         } catch (err) {
-          console.warn(`api.v-dl.com failed: ${err.message}`);
+          console.warn(`Loader.to failed: ${err.message}`);
         }
       }
 
-      // 方法 2: api.options.rip
+      // 方法 2: ytdl-core-api
       if (!targetAudioUrl) {
         try {
-          console.log(`Trying api.options.rip...`);
+          console.log(`Trying ytdl-core-api...`);
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 15000);
-          const res = await fetch(`https://api.options.rip/api/download?url=${encodeURIComponent(youtubeUrl)}`, {
+          const res = await fetch(`https://ytdl-core-api.vercel.app/api/info?url=${encodeURIComponent(youtubeUrl)}`, {
             headers: { 'User-Agent': userAgent },
             signal: controller.signal
           });
           clearTimeout(timeoutId);
           if (res.ok) {
             const data = await res.json();
-            targetAudioUrl = data.download_url || data.url || data.audioUrl;
-            if (targetAudioUrl) console.log(`Success with api.options.rip`);
+            if (data.formats) {
+              const audioFormats = data.formats.filter((f: any) => f.hasAudio && !f.hasVideo);
+              if (audioFormats.length > 0) {
+                targetAudioUrl = audioFormats[0].url;
+              } else {
+                targetAudioUrl = data.formats.find((f: any) => f.hasAudio)?.url;
+              }
+            } else if (data.url || data.audioUrl) {
+              targetAudioUrl = data.url || data.audioUrl || data.download_url;
+            }
+            if (targetAudioUrl) console.log(`Success with ytdl-core-api`);
+          } else {
+            console.warn(`ytdl-core-api returned status: ${res.status}`);
           }
         } catch (err) {
-          console.warn(`api.options.rip failed: ${err.message}`);
+          console.warn(`ytdl-core-api failed: ${err.message}`);
         }
       }
 
@@ -107,7 +120,6 @@ serve(async (req) => {
     console.log(`Fetching audio from: ${targetAudioUrl}`)
     
     let audioBuffer: ArrayBuffer | null = null;
-    let contentType = 'audio/mpeg';
 
     try {
       const controller = new AbortController();
@@ -122,9 +134,9 @@ serve(async (req) => {
         signal: controller.signal
       });
 
-      // 如果直接下载失败 (403等)，尝试使用 allorigins 代理
+      // 如果直接下载失败 (403等)，强制使用 allorigins 代理
       if (!audioResponse.ok) {
-        console.warn(`Direct fetch failed with ${audioResponse.status}. Trying allorigins proxy...`);
+        console.warn(`Direct fetch failed with ${audioResponse.status}. Forcing allorigins proxy...`);
         audioResponse = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(targetAudioUrl)}`, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
           signal: controller.signal
@@ -135,7 +147,6 @@ serve(async (req) => {
         throw new Error(`Failed to fetch audio source: ${audioResponse.status} ${audioResponse.statusText}`)
       }
 
-      contentType = audioResponse.headers.get('content-type') || 'audio/mpeg';
       audioBuffer = await audioResponse.arrayBuffer();
       clearTimeout(timeoutId);
 
@@ -143,8 +154,10 @@ serve(async (req) => {
       throw new Error(`Audio download failed: ${err.message}`);
     }
 
-    if (!audioBuffer || audioBuffer.byteLength === 0) {
-      throw new Error('Downloaded audio buffer is empty');
+    // 文件头/大小检查：小于 100KB (102400 bytes) 视为无效/错误页面
+    if (!audioBuffer || audioBuffer.byteLength < 102400) {
+      const sizeKB = audioBuffer ? Math.round(audioBuffer.byteLength / 1024) : 0;
+      throw new Error(`Downloaded audio buffer is too small (${sizeKB}KB). Likely an error page or blocked request.`);
     }
 
     // 2. 将 ArrayBuffer 上传到 Supabase Storage
@@ -156,7 +169,7 @@ serve(async (req) => {
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('audio')
       .upload(filePath, audioBuffer, {
-        contentType: contentType,
+        contentType: 'audio/mpeg', // 强制 .mp3 后缀和 MIME
         upsert: true
       })
 
