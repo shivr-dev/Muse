@@ -87,7 +87,7 @@ function renderTrackList() {
                  <button class="btn-upload" data-id="${track.id}" data-index="${index}" style="display: flex; align-items: center; gap: 4px; background: #1DB954; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
                    <i data-lucide="upload" style="width: 14px; height: 14px;"></i> 上传 MP3
                  </button>
-                 <input type="file" id="file-upload-${index}" accept="audio/*" style="display: none;">
+                 <input type="file" id="file-upload-${index}" accept="audio/*, .mp3, .m4a, .wav, application/octet-stream" style="display: none;">
                </div>`;
 
         item.innerHTML = `
@@ -167,20 +167,35 @@ function renderTrackList() {
                 const file = e.target.files[0];
                 if (!file) return;
 
+                console.log('Selected file name:', file.name);
+                console.log('Selected file type:', file.type);
+
                 try {
                     uploadBtn.innerHTML = `<i data-lucide="loader" class="spin" style="width: 14px; height: 14px;"></i> 上传中...`;
                     uploadBtn.disabled = true;
                     lucide.createIcons();
 
                     // 生成唯一文件名
-                    const fileExt = file.name.split('.').pop();
+                    const fileExt = file.name.split('.').pop().toLowerCase();
                     const filePath = `${crypto.randomUUID()}.${fileExt}`;
+
+                    let contentType = file.type;
+                    if (!contentType && fileExt === 'mp3') {
+                        contentType = 'audio/mpeg';
+                    } else if (!contentType && fileExt === 'm4a') {
+                        contentType = 'audio/mp4';
+                    } else if (!contentType && fileExt === 'wav') {
+                        contentType = 'audio/wav';
+                    } else if (!contentType) {
+                        contentType = 'application/octet-stream';
+                    }
 
                     // 上传到 Supabase Storage (audio bucket)
                     const { error: uploadError } = await supabase.storage
                         .from('audio')
                         .upload(filePath, file, {
                             cacheControl: '3600',
+                            contentType: contentType,
                             upsert: false
                         });
 
