@@ -84,6 +84,10 @@ function renderTrackList() {
                  <button class="btn-fetch-lyrics" data-id="${track.id}" data-index="${index}" style="display: flex; align-items: center; gap: 4px; background: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
                    <i data-lucide="mic-2" style="width: 14px; height: 14px;"></i> <span>更新歌词</span>
                  </button>
+                 <button class="btn-upload-srt" data-id="${track.id}" data-index="${index}" style="display: flex; align-items: center; gap: 4px; background: #333; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                   <i data-lucide="file-text" style="width: 14px; height: 14px;"></i> <span>上传字幕</span>
+                 </button>
+                 <input type="file" id="file-upload-srt-${index}" accept=".srt" style="display: none;">
                  <span class="status-synced"><i data-lucide="check-circle"></i> 已就绪</span>
                </div>`
             : `<div style="display: flex; gap: 8px;">
@@ -177,6 +181,39 @@ function renderTrackList() {
                 fetchLyricsBtn.innerHTML = `<i data-lucide="mic-2" style="width: 14px; height: 14px;"></i> <span>更新歌词</span>`;
                 fetchLyricsBtn.disabled = false;
                 lucide.createIcons();
+            });
+        }
+
+        // 绑定上传字幕按钮事件
+        const uploadSrtBtn = item.querySelector('.btn-upload-srt');
+        const fileUploadSrt = item.querySelector(`#file-upload-srt-${index}`);
+        if (uploadSrtBtn && fileUploadSrt) {
+            uploadSrtBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                fileUploadSrt.click();
+            });
+
+            fileUploadSrt.addEventListener('change', async (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                
+                const btnSpan = uploadSrtBtn.querySelector('span');
+                const originalText = btnSpan.textContent;
+                uploadSrtBtn.disabled = true;
+                uploadSrtBtn.innerHTML = `<i data-lucide="loader" class="spin" style="width: 14px; height: 14px;"></i> <span>处理中...</span>`;
+                lucide.createIcons();
+                
+                const reader = new FileReader();
+                reader.onload = async (event) => {
+                    const srtContent = event.target.result;
+                    await processSrtLyrics(track.id, track.title, track.artist, index, srtContent);
+                    
+                    uploadSrtBtn.disabled = false;
+                    uploadSrtBtn.innerHTML = `<i data-lucide="file-text" style="width: 14px; height: 14px;"></i> <span>${originalText}</span>`;
+                    lucide.createIcons();
+                    fileUploadSrt.value = ''; // Reset
+                };
+                reader.readAsText(file);
             });
         }
 
@@ -714,6 +751,80 @@ function switchMode(mode) {
 // 歌词功能
 // =========================================
 
+// 处理上传的 SRT 字幕
+async function processSrtLyrics(trackId, title, artist, index, srtContent) {
+    try {
+        console.log('开始处理 SRT 字幕:', title);
+        showToast(`<i data-lucide="sparkles" style="width: 16px; height: 16px;"></i> 正在智能翻译《${title}》的字幕...`);
+        lucide.createIcons();
+
+        // 1. 将 SRT 转换为 LRC 格式
+        let lrcContent = '';
+        const blocks = srtContent.trim().split(/\n\s*\n/);
+        for (const block of blocks) {
+            const lines = block.split('\n');
+            if (lines.length >= 3) {
+                const timeLine = lines[1];
+                const textLines = lines.slice(2).join(' ');
+                // 匹配 SRT 时间戳: 00:01:23,450 --> 00:01:25,600
+                const match = timeLine.match(/(\d{2}):(\d{2}):(\d{2}),(\d{2})\d/);
+                if (match) {
+                    const hours = parseInt(match[1]);
+                    const min = parseInt(match[2]);
+                    const sec = match[3];
+                    const ms = match[4];
+                    const totalMin = (hours * 60 + min).toString().padStart(2, '0');
+                    lrcContent += `[${totalMin}:${sec}.${ms}] ${textLines}\n`;
+                }
+            }
+        }
+
+        if (!lrcContent) {
+            throw new Error('SRT 格式解析失败或内容为空');
+        }
+
+        // 2. 发送给 Edge Function 处理
+        const { data, error } = await supabase.functions.invoke('process-lyrics', {
+            body: { title, artist, srtContent: lrcContent }
+        });
+
+        if (error) {
+            console.error('Edge Function Error:', error);
+            throw error;
+        }
+
+        if (data && data.lyricsData) {
+            const lyricsData = data.lyricsData;
+            console.log(`SRT 字幕处理成功`);
+            
+            // 更新数据库
+            const { error: dbError } = await supabase
+                .from('tracks')
+                .update({ lyrics: lyricsData })
+                .eq('id', trackId);
+                
+            if (dbError) throw dbError;
+            
+            // 更新本地状态
+            tracks[index].lyrics = lyricsData;
+            
+            showToast(`<i data-lucide="check-circle" style="width: 16px; height: 16px; color: #1DB954;"></i> 《${title}》字幕翻译完成！`);
+            lucide.createIcons();
+            
+            // 如果当前正在播放这首歌，刷新歌词显示
+            if (currentTrackIndex === index) {
+                renderLyrics();
+            }
+        } else {
+            throw new Error('未返回处理后的歌词数据');
+        }
+    } catch (err) {
+        console.error('处理 SRT 异常:', err);
+        showToast(`<i data-lucide="alert-circle" style="width: 16px; height: 16px; color: #ff4444;"></i> 字幕处理失败: ${err.message}`);
+        lucide.createIcons();
+    }
+}
+
 // 自动获取歌词与翻译 (三级跳补偿机制)
 async function fetchLyrics(trackId, title, artist, index) {
     try {
@@ -801,8 +912,13 @@ function renderLyrics() {
         return;
     }
     
+    let lyricsArray = track.lyrics;
+    if (typeof lyricsArray === 'string') {
+        lyricsArray = parseLRC(lyricsArray);
+    }
+    
     let html = '';
-    track.lyrics.forEach((line, i) => {
+    lyricsArray.forEach((line, i) => {
         const showRomaji = (currentLyricMode === 'learning' || currentLyricMode === 'all') && line.romaji;
         const showTrans = (currentLyricMode === 'bilingual' || currentLyricMode === 'all') && line.translation;
         
@@ -835,10 +951,15 @@ function syncLyrics(currentTime, forceScroll = false) {
     const track = tracks[currentTrackIndex];
     if (!track.lyrics || track.lyrics.length === 0) return;
     
+    let lyricsArray = track.lyrics;
+    if (typeof lyricsArray === 'string') {
+        lyricsArray = parseLRC(lyricsArray);
+    }
+    
     // 找到当前时间对应的歌词
     let activeIndex = -1;
-    for (let i = 0; i < track.lyrics.length; i++) {
-        if (currentTime >= track.lyrics[i].time) {
+    for (let i = 0; i < lyricsArray.length; i++) {
+        if (currentTime >= lyricsArray[i].time) {
             activeIndex = i;
         } else {
             break;

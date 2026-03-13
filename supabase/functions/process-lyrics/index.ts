@@ -13,16 +13,31 @@ let CF_API_TOKEN = "";
 function extractCleanContent(text) {
   if (!text) return '';
   let cleanText = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  const jsonMatch = cleanText.match(/```(?:json)?\n([\s\S]*?)\n```/);
+  
+  // 尝试提取 lrc 代码块
+  const lrcMatch = cleanText.match(/```lrc\n([\s\S]*?)\n```/i);
+  if (lrcMatch) {
+      return lrcMatch[1].trim();
+  }
+
+  const jsonMatch = cleanText.match(/```(?:json)?\n([\s\S]*?)\n```/i);
   if (jsonMatch) return jsonMatch[1].trim();
+  
   const startArr = cleanText.indexOf('[');
   const endArr = cleanText.lastIndexOf(']');
   if (startArr !== -1 && endArr !== -1 && endArr > startArr) {
     const substring = cleanText.substring(startArr, endArr + 1);
+    // 如果是 JSON 数组
     if (substring.includes('"time"') || substring.includes('"text"')) {
         return substring;
     }
   }
+  
+  // 如果是 LRC 格式，直接返回整个 cleanText
+  if (cleanText.startsWith('[')) {
+      return cleanText;
+  }
+  
   return cleanText;
 }
 
@@ -118,9 +133,27 @@ async function callQwen3Fallback(title, artist) {
 }
 
 /**
+ * 处理 SRT 转换后的 LRC 歌词
+ */
+async function processSrtWithQwen3(lrcContent) {
+  const prompt = `这是一段精确的 SRT 歌词脚本。请保持原有的时间轴不动，仅将其中的日文/英文内容翻译成中文，并为每一句添加日文罗马音（若有），最后以标准 .lrc 格式输出。不要输出任何额外内容！只要翻译内容
+
+${lrcContent}`;
+
+  const res = await fetchCF(prompt);
+  return extractCleanContent(res);
+}
+
+/**
  * 核心逻辑：网易云优先抓取 + AI 智能缝合
  */
-async function getEnhancedLyrics(title, artist) {
+async function getEnhancedLyrics(title, artist, srtContent) {
+  if (srtContent) {
+    console.log(`[Process SRT] 收到 SRT 转换后的 LRC 内容，交给 AI 处理...`);
+    const processedLrc = await processSrtWithQwen3(srtContent);
+    return { lyricsData: processedLrc, source: '[SRT + AI Translated]', cleanTitle: title, cleanArtist: artist };
+  }
+
   // 1. 清洗搜索词：去掉 .mp3, (Live), [MV] 等干扰项
   const cleanTitle = title.replace(/\.(mp3|wav|flac|m4a)$/i, '').replace(/[\(\[\{](live|mv|official|lyric|audio|video|official video)[\)\]\}]/gi, '').replace(/[-_]/g, ' ').trim();
   const cleanArtist = artist.replace(/\.(mp3|wav|flac|m4a)$/i, '').trim();
@@ -181,7 +214,7 @@ serve(async (req) => {
   }
 
   try {
-    const { title: rawTitle = '', artist: rawArtist = '' } = await req.json()
+    const { title: rawTitle = '', artist: rawArtist = '', srtContent = '' } = await req.json()
 
     CF_ACCOUNT_ID = Deno.env.get('CF_ACCOUNT_ID') || '';
     CF_API_TOKEN = Deno.env.get('CF_API_TOKEN') || '';
@@ -190,7 +223,7 @@ serve(async (req) => {
       throw new Error('Missing Cloudflare credentials in Supabase Secrets')
     }
 
-    const result = await getEnhancedLyrics(rawTitle, rawArtist);
+    const result = await getEnhancedLyrics(rawTitle, rawArtist, srtContent);
 
     return new Response(
       JSON.stringify(result),
